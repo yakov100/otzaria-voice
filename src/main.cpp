@@ -590,35 +590,122 @@ void postQuit() {
   closesocket(s);
 }
 
-int install() {
-  const std::wstring cmd = L"\"" + exePath() + L"\"";
-  HKEY h;
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h, nullptr) !=
-      ERROR_SUCCESS)
-    return 1;
-  RegSetValueExW(h, kRunValue, 0, REG_SZ, reinterpret_cast<const BYTE*>(cmd.c_str()),
-                 DWORD((cmd.size() + 1) * sizeof(wchar_t)));
-  RegCloseKey(h);
+// Installed per user, without administrator rights: the program copies itself
+// to %LOCALAPPDATA%\Programs\OtzariaVoice, starts at login (HKCU Run), and is
+// listed in Windows' "Installed apps" with an uninstall entry.
+const wchar_t* kUninstallKey =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OtzariaVoice";
+const wchar_t* kTitle = L"\u05E9\u05D9\u05E8\u05D5\u05EA \u05D4\u05D3\u05D9\u05D1\u05D5\u05E8 \u05E9\u05DC \u05D0\u05D5\u05E6\u05E8\u05D9\u05D0";  // שירות הדיבור של אוצריא
+
+std::wstring installDir() { return env(L"LOCALAPPDATA") + L"\\Programs\\OtzariaVoice"; }
+std::wstring installedExe() { return installDir() + L"\\otzaria-voice.exe"; }
+
+bool sameFile(const std::wstring& a, const std::wstring& b) {
+  return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+void message(const std::wstring& text, UINT icon) {
+  MessageBoxW(nullptr, text.c_str(), kTitle, MB_OK | icon | MB_RTLREADING | MB_RIGHT | MB_SETFOREGROUND);
+}
+
+void setString(HKEY key, const wchar_t* name, const std::wstring& value) {
+  RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                 DWORD((value.size() + 1) * sizeof(wchar_t)));
+}
+
+void setDword(HKEY key, const wchar_t* name, DWORD value) {
+  RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof value);
+}
+
+bool launchDetached(const std::wstring& exe) {
   STARTUPINFOW si{sizeof si};
   PROCESS_INFORMATION pi{};
-  std::wstring line = cmd;
-  if (CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS, nullptr,
-                     nullptr, &si, &pi)) {
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+  std::wstring line = L"\"" + exe + L"\"";
+  if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS, nullptr,
+                      nullptr, &si, &pi))
+    return false;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return true;
+}
+
+int install(bool quiet) {
+  const std::wstring target = installedExe();
+  // A running copy (an older version, say) holds the file: ask it to quit first.
+  postQuit();
+  CreateDirectoryW((env(L"LOCALAPPDATA") + L"\\Programs").c_str(), nullptr);
+  CreateDirectoryW(installDir().c_str(), nullptr);
+  if (!sameFile(exePath(), target)) {
+    bool copied = false;
+    for (int i = 0; i < 20 && !copied; i++) {
+      copied = CopyFileW(exePath().c_str(), target.c_str(), FALSE) != 0;
+      if (!copied) Sleep(250);
+    }
+    if (!copied) {
+      if (!quiet) message(L"\u05D4\u05D4\u05EA\u05E7\u05E0\u05D4 \u05E0\u05DB\u05E9\u05DC\u05D4: \u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05D4\u05E2\u05EA\u05D9\u05E7 \u05D0\u05EA \u05D4\u05E7\u05D5\u05D1\u05E5.", MB_ICONERROR);  // ההתקנה נכשלה: לא ניתן להעתיק את הקובץ.
+      log("install: copy failed");
+      return 1;
+    }
   }
-  log("installed for login start");
+  const std::wstring quoted = L"\"" + target + L"\"";
+  HKEY h;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h,
+                      nullptr) == ERROR_SUCCESS) {
+    setString(h, kRunValue, quoted);
+    RegCloseKey(h);
+  }
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kUninstallKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h,
+                      nullptr) == ERROR_SUCCESS) {
+    setString(h, L"DisplayName", kTitle);
+    setString(h, L"DisplayVersion", util::widen(kVersion));
+    setString(h, L"Publisher", L"Otzaria");
+    setString(h, L"DisplayIcon", target);
+    setString(h, L"InstallLocation", installDir());
+    setString(h, L"UninstallString", quoted + L" --uninstall");
+    setString(h, L"QuietUninstallString", quoted + L" --uninstall --quiet");
+    setDword(h, L"NoModify", 1);
+    setDword(h, L"NoRepair", 1);
+    setDword(h, L"EstimatedSize", 1024);  // KB, without the downloaded voice pack
+    RegCloseKey(h);
+  }
+  launchDetached(target);
+  log(std::string("installed ") + kVersion + " for login start");
+  if (!quiet)
+    message(L"\u05E9\u05D9\u05E8\u05D5\u05EA \u05D4\u05D3\u05D9\u05D1\u05D5\u05E8 \u05D4\u05D5\u05EA\u05E7\u05DF \u05D5\u05E4\u05D5\u05E2\u05DC.\n"
+            L"\u05DE\u05E2\u05DB\u05E9\u05D9\u05D5 \u05D4\u05D5\u05D0 \u05D9\u05E2\u05DC\u05D4 \u05DE\u05E2\u05E6\u05DE\u05D5 \u05D1\u05DB\u05DC \u05D4\u05E4\u05E2\u05DC\u05D4 \u05E9\u05DC \u05D4\u05DE\u05D7\u05E9\u05D1, \u05D5\u05D4\u05EA\u05D5\u05E1\u05E4\u05D9\u05DD \u05E9\u05DC \u05D0\u05D5\u05E6\u05E8\u05D9\u05D0 \u05D9\u05D5\u05DB\u05DC\u05D5 \u05DC\u05D4\u05E9\u05EA\u05DE\u05E9 \u05D1\u05D5.\n"
+            L"\u05DC\u05D4\u05E1\u05E8\u05D4: \u05D4\u05D2\u05D3\u05E8\u05D5\u05EA \u05D5\u05D9\u05E0\u05D3\u05D5\u05E1 \u2190 \u05D0\u05E4\u05DC\u05D9\u05E7\u05E6\u05D9\u05D5\u05EA \u05DE\u05D5\u05EA\u05E7\u05E0\u05D5\u05EA.",
+            MB_ICONINFORMATION);
+  // שירות הדיבור הותקן ופועל.
+  // מעכשיו הוא יעלה מעצמו בכל הפעלה של המחשב, והתוספים של אוצריא יוכלו להשתמש בו.
+  // להסרה: הגדרות וינדוס ← אפליקציות מותקנות.
   return 0;
 }
 
-int uninstall() {
+int uninstall(bool quiet) {
   HKEY h;
   if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &h) == ERROR_SUCCESS) {
     RegDeleteValueW(h, kRunValue);
     RegCloseKey(h);
   }
+  RegDeleteKeyW(HKEY_CURRENT_USER, kUninstallKey);
   postQuit();
   log("uninstalled");
+  // A running program cannot delete its own file: a hidden shell does it a
+  // moment after this process exits.
+  const std::wstring cmd = L"cmd.exe /c ping -n 3 127.0.0.1 >nul & del /f /q \"" + installedExe() +
+                           L"\" & rmdir \"" + installDir() + L"\"";
+  STARTUPINFOW si{sizeof si};
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi{};
+  std::wstring line = cmd;
+  if (CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                     nullptr, &si, &pi)) {
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+  }
+  if (!quiet)
+    message(L"\u05E9\u05D9\u05E8\u05D5\u05EA \u05D4\u05D3\u05D9\u05D1\u05D5\u05E8 \u05D4\u05D5\u05E1\u05E8.", MB_ICONINFORMATION);  // שירות הדיבור הוסר.
   return 0;
 }
 
@@ -709,8 +796,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
       return 3;
     }
   }
+  const bool quiet = argc > 2 && std::wstring(argv[2]) == L"--quiet";
   LocalFree(argv);
-  if (arg == L"--install") return install();
-  if (arg == L"--uninstall") return uninstall();
+  if (arg == L"--install") return install(quiet);
+  if (arg == L"--uninstall") return uninstall(quiet);
+  if (arg == L"--serve") return serve();
+  // Double-clicked from a download: install. The installed copy, started at
+  // login, serves.
+  if (!sameFile(exePath(), installedExe())) return install(false);
   return serve();
 }
