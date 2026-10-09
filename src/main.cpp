@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -187,6 +188,38 @@ class Microphone {
   ~Microphone() { close(); }
 
   bool open(std::string& error) {
+    // Testing only: OTZARIA_VOICE_TEST_WAV plays a 16kHz mono recording in real
+    // time instead of the microphone, then silence.
+    if (auto wav = env(L"OTZARIA_VOICE_TEST_WAV"); !wav.empty()) {
+      FILE* f = _wfopen(wav.c_str(), L"rb");
+      if (!f) {
+        error = "test recording missing";
+        return false;
+      }
+      std::vector<char> b;
+      char buf[65536];
+      size_t n;
+      while ((n = fread(buf, 1, sizeof buf, f)) > 0) b.insert(b.end(), buf, buf + n);
+      fclose(f);
+      for (size_t o = 12; o + 8 <= b.size();) {
+        uint32_t size;
+        memcpy(&size, &b[o + 4], 4);
+        if (memcmp(&b[o], "data", 4) == 0) {
+          test_.resize(std::min<size_t>(size, b.size() - o - 8) / 2);
+          for (size_t i = 0; i < test_.size(); i++) {
+            int16_t v;
+            memcpy(&v, &b[o + 8 + i * 2], 2);
+            test_[i] = v / 32768.0f;
+          }
+          break;
+        }
+        o += 8 + size + (size & 1);
+      }
+      test_.insert(test_.end(), 16000 * 2, 0.0f);
+      testStart_ = GetTickCount64();
+      testMode_ = true;
+      return true;
+    }
     event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     WAVEFORMATEX fmt{};
     fmt.wFormatTag = WAVE_FORMAT_PCM;
@@ -220,11 +253,25 @@ class Microphone {
     return true;
   }
 
-  void wait(DWORD ms) { WaitForSingleObject(event_, ms); }
+  void wait(DWORD ms) {
+    if (testMode_) Sleep(ms);
+    else WaitForSingleObject(event_, ms);
+  }
 
   // Recorded buffers, in order; each is handed back to the device after [use].
   template <typename F>
   void drain(F use, bool requeue = true) {
+    if (testMode_) {
+      // Whatever "was recorded" by now; silence after the recording ends.
+      const size_t due = requeue ? size_t((GetTickCount64() - testStart_) * 16) : testPos_ + kSamples;
+      while (testPos_ + kSamples <= due) {
+        std::vector<float> pcm(kSamples, 0.0f);
+        for (size_t i = 0; i < kSamples && testPos_ + i < test_.size(); i++) pcm[i] = test_[testPos_ + i];
+        testPos_ += kSamples;
+        use(pcm);
+      }
+      return;
+    }
     while (wave_) {
       auto& h = headers_[next_];
       if (!(h.dwFlags & WHDR_DONE)) return;
@@ -264,6 +311,10 @@ class Microphone {
   std::vector<int16_t> data_;
   std::vector<WAVEHDR> headers_;
   int next_ = 0;
+  bool testMode_ = false;
+  std::vector<float> test_;
+  size_t testPos_ = 0;
+  ULONGLONG testStart_ = 0;
 };
 
 // ---------------------------------------------------------------- HTTP
@@ -350,6 +401,36 @@ std::atomic<bool> active{false};
 std::atomic<bool> stopRequested{false};
 std::atomic<bool> cancelRequested{false};
 
+// Listens until stopped, cancelled or [maxDuration]; [sink] receives every
+// update. [alive] returning false aborts at once (the listener went away).
+// Returns why it ended: stopped | cancelled | time_limit | gone.
+std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords,
+                   const std::vector<std::string>& context,
+                   const std::function<void(const std::vector<voice::LiveUpdate>&)>& sink,
+                   const std::function<bool()>& alive, const std::function<void()>& onReady,
+                   std::chrono::seconds maxDuration) {
+  Engine& e = loadEngine();
+  voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context);
+  onReady();
+  const auto started = std::chrono::steady_clock::now();
+  std::string reason = "stopped";
+  while (true) {
+    if (cancelRequested) return "cancelled";
+    if (stopRequested) break;
+    if (std::chrono::steady_clock::now() - started > maxDuration) {
+      reason = "time_limit";
+      break;
+    }
+    if (!alive()) return "gone";
+    mic.wait(50);
+    mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); });
+  }
+  mic.stop();
+  mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); }, false);
+  sink(live.finish());
+  return reason;
+}
+
 void dictate(SOCKET s, const Request& req) {
   if (active) cancelRequested = true;  // a new dictation replaces a stale one
   std::lock_guard<std::mutex> session(sessionMu);
@@ -412,35 +493,13 @@ void dictate(SOCKET s, const Request& req) {
   };
   line("{\"type\":\"listening\"}");
 
-  std::string reason = "stopped";
+  std::string reason;
   try {
-    Engine& e = loadEngine();
-    voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context);
-    line("{\"type\":\"ready\"}");
-    const auto started = std::chrono::steady_clock::now();
-    while (alive) {
-      if (cancelRequested) {
-        reason = "cancelled";
-        break;
-      }
-      if (stopRequested) break;
-      if (std::chrono::steady_clock::now() - started > kMaxSession) {
-        reason = "time_limit";
-        break;
-      }
-      if (clientGone(s)) {
-        alive = false;
-        break;
-      }
-      mic.wait(50);
-      mic.drain([&](const std::vector<float>& pcm) { sendUpdates(live.add(pcm.data(), pcm.size())); });
-    }
-    if (alive && reason != "cancelled") {
-      mic.stop();
-      mic.drain([&](const std::vector<float>& pcm) { sendUpdates(live.add(pcm.data(), pcm.size())); },
-                false);
-      sendUpdates(live.finish());
-    }
+    reason = recognizeLive(
+        mic, hotwords, context, sendUpdates,
+        [&] { return alive && !clientGone(s); }, [&] { line("{\"type\":\"ready\"}"); },
+        kMaxSession);
+    if (reason == "gone") alive = false;
   } catch (const std::exception& ex) {
     log(std::string("dictation error: ") + ex.what());
     line("{\"type\":\"error\",\"message\":" + json::quote(ex.what()) + "}");
@@ -449,6 +508,256 @@ void dictate(SOCKET s, const Request& req) {
   mic.close();
   line("{\"type\":\"end\",\"reason\":" + json::quote(reason) + "}");
   if (alive) sendAll(s, "0\r\n\r\n");
+}
+
+// ---------------------------------------------------------------- typing anywhere
+//
+// Ctrl+Alt+Space in any program: the service listens and types what is said
+// into the focused field (Otzaria's search fields, Word, mail...), correcting
+// the end of the sentence while it is spoken. The same keys end it.
+
+constexpr int kHotkeyId = 1;
+const wchar_t* kTitleBadge = L"Otzaria Voice";
+constexpr UINT kMsgShow = WM_APP + 1;   // lParam: new std::wstring*
+constexpr UINT kMsgHide = WM_APP + 2;
+constexpr auto kMaxTyping = std::chrono::minutes(10);
+HWND uiWindow = nullptr;     // hidden; owns the hotkey
+HWND badge = nullptr;        // the small "listening" sign
+std::wstring badgeText;
+std::atomic<bool> typingActive{false};
+
+// The first free combination wins: another program may already own one.
+struct Hotkey {
+  UINT mods, vk;
+  const char* name;      // for plugins (status)
+  const wchar_t* label;  // for the badge
+};
+const Hotkey kHotkeys[] = {
+    {MOD_CONTROL | MOD_ALT, VK_SPACE, "Ctrl+Alt+Space", L"Ctrl+Alt+\u05E8\u05D5\u05D5\u05D7"},
+    {MOD_WIN | MOD_ALT, VK_SPACE, "Win+Alt+Space", L"Win+Alt+\u05E8\u05D5\u05D5\u05D7"},
+    {MOD_CONTROL | MOD_ALT, 'D', "Ctrl+Alt+D", L"Ctrl+Alt+D"},
+};
+std::atomic<const Hotkey*> hotkey{nullptr};
+
+void showBadge(const std::wstring& text) {
+  if (uiWindow) PostMessageW(uiWindow, kMsgShow, 0, LPARAM(new std::wstring(text)));
+}
+
+void hideBadge() {
+  if (uiWindow) PostMessageW(uiWindow, kMsgHide, 0, 0);
+}
+
+bool modifiersDown() {
+  for (int vk : {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN})
+    if (GetAsyncKeyState(vk) & 0x8000) return true;
+  return false;
+}
+
+// Typing while Ctrl/Alt are still held would turn letters into shortcuts.
+void waitForModifiers() {
+  for (int i = 0; i < 100 && modifiersDown(); i++) Sleep(20);
+}
+
+void sendKeys(std::vector<INPUT>& in) {
+  if (!in.empty()) SendInput(UINT(in.size()), in.data(), sizeof(INPUT));
+  in.clear();
+}
+
+// Deletes [remove] characters before the cursor and types [text].
+void typeEdit(size_t remove, const std::wstring& text) {
+  waitForModifiers();
+  std::vector<INPUT> in;
+  for (size_t i = 0; i < remove; i++) {
+    INPUT down{INPUT_KEYBOARD}, up{INPUT_KEYBOARD};
+    down.ki.wVk = up.ki.wVk = VK_BACK;
+    up.ki.dwFlags = KEYEVENTF_KEYUP;
+    in.push_back(down);
+    in.push_back(up);
+  }
+  for (wchar_t c : text) {
+    INPUT down{INPUT_KEYBOARD}, up{INPUT_KEYBOARD};
+    down.ki.wScan = up.ki.wScan = c;
+    down.ki.dwFlags = KEYEVENTF_UNICODE;
+    up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+    in.push_back(down);
+    in.push_back(up);
+  }
+  sendKeys(in);
+}
+
+void typingSession() {
+  if (active) return;  // a plugin is dictating
+  std::lock_guard<std::mutex> session(sessionMu);
+  active = true;
+  typingActive = true;
+  stopRequested = false;
+  cancelRequested = false;
+  struct Done {
+    ~Done() {
+      active = false;
+      typingActive = false;
+      std::lock_guard<std::mutex> lock(engineMu);
+      lastUse = std::chrono::steady_clock::now();
+    }
+  } done;
+
+  const HWND target = GetForegroundWindow();
+  if (!packReady()) {
+    showBadge(L"\u05D7\u05D1\u05D9\u05DC\u05EA \u05D4\u05D3\u05D9\u05D1\u05D5\u05E8 \u05DC\u05D0 \u05DE\u05D5\u05EA\u05E7\u05E0\u05EA \u2014 \u05D4\u05EA\u05E7\u05D9\u05E0\u05D5 \u05D0\u05D5\u05EA\u05D4 \u05DE\u05D4\u05EA\u05D5\u05E1\u05E3 \u00AB\u05D7\u05D9\u05E4\u05D5\u05E9 \u05D1\u05D3\u05D9\u05D1\u05D5\u05E8\u00BB");  // חבילת הדיבור לא מותקנת — התקינו אותה מהתוסף «חיפוש בדיבור»
+    Sleep(4000);
+    hideBadge();
+    return;
+  }
+  Microphone mic;
+  std::string micError;
+  if (!mic.open(micError)) {
+    showBadge(L"\u05D0\u05D9\u05DF \u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05E7\u05E8\u05D5\u05E4\u05D5\u05DF");  // אין גישה למיקרופון
+    Sleep(3000);
+    hideBadge();
+    return;
+  }
+  const Hotkey* hk = hotkey.load();
+  const std::wstring listening = L"\u05DE\u05E7\u05E9\u05D9\u05D1 \u2014 \u05D3\u05D1\u05E8\u05D5. " +
+                                 std::wstring(hk ? hk->label : L"") +
+                                 L" \u05DC\u05E1\u05D9\u05D5\u05DD";  // מקשיב — דברו. <צירוף> לסיום
+  showBadge(L"\u05D8\u05D5\u05E2\u05DF\u2026 \u05D0\u05E4\u05E9\u05E8 \u05DB\u05D1\u05E8 \u05DC\u05D3\u05D1\u05E8");  // טוען… אפשר כבר לדבר
+
+  std::map<int, std::string> segments;
+  std::wstring typed;
+  bool moved = false;
+  auto sink = [&](const std::vector<voice::LiveUpdate>& ups) {
+    if (ups.empty() || moved) return;
+    for (auto& u : ups) segments[u.segment] = u.text;
+    std::string all;
+    for (auto& [k, t] : segments)
+      if (!t.empty()) all += (all.empty() ? "" : " ") + t;
+    const std::wstring want = util::widen(all);
+    size_t common = 0;
+    while (common < want.size() && common < typed.size() && want[common] == typed[common]) common++;
+    if (common == want.size() && common == typed.size()) return;
+    // Text goes only where dictation began: another window must not receive
+    // backspaces meant for this one.
+    if (GetForegroundWindow() != target) {
+      moved = true;
+      return;
+    }
+    typeEdit(typed.size() - common, want.substr(common));
+    typed = want;
+  };
+  std::string reason;
+  try {
+    reason = recognizeLive(
+        mic, {}, {}, sink, [&] { return !moved; }, [&] { showBadge(listening); }, kMaxTyping);
+  } catch (const std::exception& ex) {
+    log(std::string("typing error: ") + ex.what());
+    reason = "error";
+  }
+  mic.close();
+  if (moved) {
+    showBadge(L"\u05D4\u05D4\u05E7\u05DC\u05D8\u05D4 \u05E0\u05E2\u05E6\u05E8\u05D4: \u05E2\u05D1\u05E8\u05EA\u05DD \u05DC\u05D7\u05DC\u05D5\u05DF \u05D0\u05D7\u05E8");  // ההקלטה נעצרה: עברתם לחלון אחר
+    Sleep(2500);
+  } else if (!typed.empty() && GetForegroundWindow() == target) {
+    typeEdit(0, L" ");  // like typing: the next word does not stick to this one
+  }
+  hideBadge();
+}
+
+void toggleTyping() {
+  if (typingActive) {
+    stopRequested = true;
+    showBadge(L"\u05DE\u05E9\u05DC\u05D9\u05DD \u05D0\u05EA \u05D4\u05DE\u05E9\u05E4\u05D8 \u05D4\u05D0\u05D7\u05E8\u05D5\u05DF\u2026");  // משלים את המשפט האחרון…
+  } else if (!active) {
+    std::thread(typingSession).detach();
+  }
+}
+
+LRESULT CALLBACK uiProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+  switch (msg) {
+    case WM_HOTKEY:
+      if (w == kHotkeyId) toggleTyping();
+      return 0;
+    case kMsgShow: {
+      std::unique_ptr<std::wstring> text(reinterpret_cast<std::wstring*>(l));
+      badgeText = *text;
+      // Top centre of the screen the user is working on.
+      HMONITOR mon = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+      MONITORINFO mi{sizeof mi};
+      GetMonitorInfoW(mon, &mi);
+      const UINT dpi = GetDpiForWindow(badge) ? GetDpiForWindow(badge) : 96;
+      const int width = MulDiv(440, dpi, 96), height = MulDiv(40, dpi, 96);
+      const int x = (mi.rcWork.left + mi.rcWork.right - width) / 2;
+      SetWindowPos(badge, HWND_TOPMOST, x, mi.rcWork.top + MulDiv(12, dpi, 96), width, height,
+                   SWP_NOACTIVATE | SWP_SHOWWINDOW);
+      InvalidateRect(badge, nullptr, TRUE);
+      return 0;
+    }
+    case kMsgHide:
+      ShowWindow(badge, SW_HIDE);
+      return 0;
+  }
+  return DefWindowProcW(h, msg, w, l);
+}
+
+LRESULT CALLBACK badgeProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+  if (msg == WM_PAINT) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    RECT r;
+    GetClientRect(h, &r);
+    HBRUSH bg = CreateSolidBrush(RGB(32, 33, 36));
+    FillRect(dc, &r, bg);
+    DeleteObject(bg);
+    const UINT dpi = GetDpiForWindow(h) ? GetDpiForWindow(h) : 96;
+    HFONT font = CreateFontW(-MulDiv(15, dpi, 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    HGDIOBJ old = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    const std::wstring text = L"\U0001F399  " + badgeText;
+    DrawTextW(dc, text.c_str(), int(text.size()), &r,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_RTLREADING | DT_END_ELLIPSIS);
+    SelectObject(dc, old);
+    DeleteObject(font);
+    EndPaint(h, &ps);
+    return 0;
+  }
+  return DefWindowProcW(h, msg, w, l);
+}
+
+void uiLoop() {
+  HINSTANCE inst = GetModuleHandleW(nullptr);
+  WNDCLASSW ui{};
+  ui.lpfnWndProc = uiProc;
+  ui.hInstance = inst;
+  ui.lpszClassName = L"OtzariaVoiceUi";
+  RegisterClassW(&ui);
+  WNDCLASSW bc{};
+  bc.lpfnWndProc = badgeProc;
+  bc.hInstance = inst;
+  bc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  bc.lpszClassName = L"OtzariaVoiceBadge";
+  RegisterClassW(&bc);
+  uiWindow = CreateWindowExW(0, ui.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, inst,
+                             nullptr);
+  // Never takes focus and lets clicks through: typing goes to the user's window.
+  badge = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED |
+                              WS_EX_TRANSPARENT,
+                          bc.lpszClassName, kTitleBadge, WS_POPUP, 0, 0, 10, 10, nullptr, nullptr, inst,
+                          nullptr);
+  SetLayeredWindowAttributes(badge, 0, 235, LWA_ALPHA);
+  for (const auto& k : kHotkeys) {
+    if (RegisterHotKey(uiWindow, kHotkeyId, k.mods | MOD_NOREPEAT, k.vk)) {
+      hotkey = &k;
+      log(std::string("hotkey ") + k.name);
+      break;
+    }
+    log(std::string("hotkey ") + k.name + " is taken by another program");
+  }
+  MSG m;
+  while (GetMessageW(&m, nullptr, 0, 0) > 0) {
+    TranslateMessage(&m);
+    DispatchMessageW(&m);
+  }
 }
 
 // ---------------------------------------------------------------- server
@@ -490,6 +799,7 @@ void handle(SOCKET s) {
                   ",\"packVersion\":" + std::to_string(pack::installedVersion()) +
                   ",\"packSize\":" + std::to_string(pack::kRelease.size) +
                   ",\"packJob\":" + packJob() +
+                  ",\"hotkey\":" + json::quote(hotkey.load() ? hotkey.load()->name : "") +
                   ",\"runtime\":" + (findOnnxRuntime().empty() ? "false" : "true") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
                   ",\"busy\":" + (active ? "true" : "false") + "}");
@@ -575,6 +885,7 @@ int serve() {
   }
   log(std::string("service ") + kVersion + " listening on 127.0.0.1:" + std::to_string(port()));
   std::thread(idleLoop).detach();
+  std::thread(uiLoop).detach();
   trimMemory();
   while (!quitting) {
     SOCKET c = accept(listener, nullptr, nullptr);
