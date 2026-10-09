@@ -35,6 +35,7 @@
 
 #include "engine.h"
 #include "json.h"
+#include "pack.h"
 #include "util.h"
 
 namespace {
@@ -83,18 +84,8 @@ void log(const std::string& line) {
   fclose(f);
 }
 
-std::wstring packDir() {
-  auto e = env(L"OTZARIA_VOICE_PACK_DIR");
-  return e.empty() ? env(L"APPDATA") + L"\\otzaria\\stt\\pack" : e;
-}
-
-bool packReady() {
-  const auto d = packDir();
-  for (auto f : {L"\\ctc\\model.int8.onnx", L"\\ctc\\vocab.json", L"\\ctc\\preprocessor.json",
-                 L"\\lm\\library.otzlm"})
-    if (!exists(d + f)) return false;
-  return true;
-}
+std::wstring packDir() { return pack::dir(); }
+bool packReady() { return pack::ready(); }
 
 std::wstring regString(HKEY key, const wchar_t* sub, const wchar_t* name) {
   wchar_t buf[1024];
@@ -465,6 +456,17 @@ void dictate(SOCKET s, const Request& req) {
 std::atomic<bool> quitting{false};
 SOCKET listener = INVALID_SOCKET;
 
+std::string packJob() {
+  const auto p = pack::progress();
+  return "{\"state\":" + json::quote(p.state) + ",\"received\":" + std::to_string(p.received) +
+         ",\"total\":" + std::to_string(p.total) + ",\"error\":" + json::quote(p.error) + "}";
+}
+
+bool packBusy() {
+  const auto st = pack::progress().state;
+  return st == "downloading" || st == "verifying" || st == "extracting";
+}
+
 void handle(SOCKET s) {
   DWORD timeout = 10000;
   setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
@@ -485,11 +487,28 @@ void handle(SOCKET s) {
       respond(s, 200,
               std::string("{\"service\":\"otzaria-voice\",\"version\":\"") + kVersion +
                   "\",\"pack\":" + (packReady() ? "true" : "false") +
+                  ",\"packVersion\":" + std::to_string(pack::installedVersion()) +
+                  ",\"packSize\":" + std::to_string(pack::kRelease.size) +
+                  ",\"packJob\":" + packJob() +
                   ",\"runtime\":" + (findOnnxRuntime().empty() ? "false" : "true") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
                   ",\"busy\":" + (active ? "true" : "false") + "}");
     } else if (req.method == "POST" && req.path == "/dictate") {
-      dictate(s, req);
+      if (packBusy())
+        respond(s, 503, errorBody("pack_installing", "the voice pack is being installed"));
+      else
+        dictate(s, req);
+    } else if (req.method == "POST" && req.path == "/install-pack") {
+      if (active) {
+        respond(s, 409, errorBody("busy", "stop dictation first"));
+      } else {
+        // The new pack replaces files the loaded engine has open.
+        pack::startInstall([] {
+          std::lock_guard<std::mutex> lock(engineMu);
+          engine.reset();
+        });
+        respond(s, 200, "{\"started\":true,\"packJob\":" + packJob() + "}");
+      }
     } else if (req.method == "POST" && req.path == "/stop") {
       const bool was = active;
       stopRequested = true;
@@ -535,7 +554,9 @@ int port() {
 }
 
 int serve() {
-  HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\OtzariaVoiceService");
+  // One instance per port (a test instance may run beside the installed one).
+  const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(port());
+  HANDLE single = CreateMutexW(nullptr, TRUE, mutexName.c_str());
   if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
   WSADATA wsa;
   WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -781,6 +802,8 @@ int evaluate(const std::wstring& manifest, const std::wstring& outPath) {
 }
 
 }  // namespace
+
+void serviceLog(const std::string& line) { log(line); }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   int argc = 0;
