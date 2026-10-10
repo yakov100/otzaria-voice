@@ -178,7 +178,7 @@ jobs:
         shell: pwsh
         run: |
           # service/build.cmd: CMake + Visual Studio, result in service\out\otzaria-voice.exe.
-          cmd /c serviceuild.cmd
+          cmd /c service\build.cmd
           if ($LASTEXITCODE) { exit 1 }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item service/out/otzaria-voice.exe dist/otzaria-voice.exe
