@@ -55,4 +55,22 @@ grep -q '"type":"end"' "$work/dictate.out" || fail "dictation did not end"
 curl -sf "${hdr[@]}" -X POST "$base/quit" >/dev/null || true
 for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
 kill "$pid" 2>/dev/null || true
+
+# The offline evaluation runs the whole decoder (model + language model) over a
+# louder recording, whatever it hears.
+"$py" - "$work/loud.wav" <<'EOF'
+import math, random, struct, sys, wave
+random.seed(2)
+with wave.open(sys.argv[1], "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+    w.writeframes(b"".join(struct.pack("<h", int(6000 * math.sin(i * 0.07) * (0.5 + random.random())))
+                           for i in range(32000)))
+EOF
+printf '{"id": "smoke", "wav": "loud.wav", "ref": "", "tags": [], "split": "dev"}\n' >"$work/manifest.jsonl"
+m="$work/manifest.jsonl" o="$work/eval.jsonl"
+command -v cygpath >/dev/null 2>&1 && { m="$(cygpath -w "$m")"; o="$(cygpath -w "$o")"; }
+unset OTZARIA_VOICE_TEST_WAV
+"$exe" --eval "$m" "$o" || fail "--eval exited $?"
+echo "eval:"; cat "$work/eval.jsonl"
+grep -q '"hyp"' "$work/eval.jsonl" || fail "--eval wrote no result"
 echo "smoke test passed"
