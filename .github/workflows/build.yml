@@ -1,0 +1,505 @@
+name: בנייה ואריזה
+
+# On every push: builds the speech service for every platform whose sources are
+# ready, packages two installers per platform (with the voice pack / without it,
+# downloading it later), packages and validates the plugin, and uploads all of
+# them as workflow artifacts. On pushes to main whose plugin/manifest.json
+# version has no GitHub Release yet, it also creates Release v<version> with all
+# files and publishes the plugin to the Otzaria store (when the store secrets
+# exist).
+#
+# Platforms whose sources are not there yet are skipped, not failed:
+#   Windows  service/CMakeLists.txt, or else the MSVC script service/build.cmd
+#   Linux    service/CMakeLists.txt
+#   macOS    service/CMakeLists.txt  (arm64: ONNX Runtime 1.28.0 has no x86_64 macOS build)
+#   Android  service/android (Gradle project, app module "app")
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      stub_service:
+        description: 'בדיקת האריזה ל-Linux ול-macOS עם שירות מדומה (רק כשקוד השירות לאותן מערכות עוד לא קיים)'
+        type: boolean
+        default: false
+      publish:
+        description: 'פרסום לחנות אוצריא בענף main: auto (כשיש סודות) / true / false'
+        default: 'auto'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACK_CACHE_KEY: voice-pack-v3-bde4cfd19a2a581f7836267ddd7ece700bf93c51e122306d6a567958f4c7eb1e
+
+jobs:
+  detect:
+    name: זיהוי גרסה ומקורות
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.d.outputs.version }}
+      cmake: ${{ steps.d.outputs.cmake }}
+      stub: ${{ steps.d.outputs.stub }}
+      android: ${{ steps.d.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        name: גרסה ומה אפשר לבנות
+        env:
+          STUB: ${{ inputs.stub_service == true }}
+        run: |
+          version="$(python3 -c "import json; print(json.load(open('plugin/manifest.json', encoding='utf-8'))['version'])")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::גרסה לא תקינה ב-plugin/manifest.json: '$version' (צפוי X.Y.Z)"; exit 1
+          fi
+          cmake=false; [ -f service/CMakeLists.txt ] && cmake=true
+          android=false
+          if [ -f service/android/settings.gradle ] || [ -f service/android/settings.gradle.kts ]; then android=true; fi
+          stub=false; [ "$cmake" = false ] && [ "$STUB" = true ] && stub=true
+          {
+            echo "version=$version"
+            echo "cmake=$cmake"
+            echo "stub=$stub"
+            echo "android=$android"
+          } >>"$GITHUB_OUTPUT"
+          echo "גרסה: $version | CMake: $cmake | שירות מדומה: $stub | Android: $android"
+          [ "$cmake" = true ] || echo "::notice::אין service/CMakeLists.txt עדיין: Linux ו-macOS ידולגו, ו-Windows ייבנה עם service/build.cmd."
+          [ "$android" = true ] || echo "::notice::אין פרויקט Android בתיקייה service/android עדיין: בניית Android תדולג."
+
+  plugin:
+    name: תוסף (.otzplugin)
+    runs-on: ubuntu-latest
+    env:
+      HAS_STORE_SECRETS: ${{ secrets.OTZARIA_USER != '' && secrets.OTZARIA_PASSWORD != '' }}
+      PUBLISH: ${{ inputs.publish || 'auto' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official Otzaria action: the same checks as the store, and the .otzplugin.
+      - name: ולידציה ואריזה
+        id: build
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugin
+          build: 'true'
+          publish: 'false'
+
+      - name: העלאת התוסף
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-plugin
+          path: ${{ steps.build.outputs.plugin-file }}
+          if-no-files-found: error
+
+      - name: צילומי מסך לחנות
+        id: shots
+        run: |
+          # Store screenshots live in screenshots/ at the repository root
+          # (PNG/JPG, up to 10, in name order). The first store release needs at least one.
+          list="$(ls screenshots/*.png screenshots/*.jpg screenshots/*.jpeg 2>/dev/null | sort | head -n 10 | paste -sd, - || true)"
+          echo "list=$list" >>"$GITHUB_OUTPUT"
+          echo "צילומי מסך: ${list:-אין}"
+
+      - name: פרסום לחנות — דילוג
+        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS != 'true'
+        run: echo "::notice::פרסום לחנות אוצריא דולג - הסודות OTZARIA_USER ו-OTZARIA_PASSWORD לא הוגדרו במאגר (Settings > Secrets and variables > Actions)."
+
+      - name: פרסום לחנות אוצריא
+        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && env.PUBLISH != 'false'
+        id: publish
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugin
+          otzaria-user: ${{ secrets.OTZARIA_USER }}
+          otzaria-password: ${{ secrets.OTZARIA_PASSWORD }}
+          publish: ${{ env.PUBLISH }}
+          screenshots: ${{ steps.shots.outputs.list }}
+          # Consent to receive user bug reports by e-mail; the store requires it
+          # for a plugin's first release. Set the repository variable
+          # OTZARIA_REPORTS_CONSENT=true to give it.
+          reports-consent: ${{ vars.OTZARIA_REPORTS_CONSENT == 'true' && 'true' || 'false' }}
+
+  windows:
+    name: Windows x64
+    needs: detect
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: בניית השירות
+        shell: pwsh
+        run: |
+          if (Test-Path service/CMakeLists.txt) {
+            cmake -S service -B build -A x64
+            if ($LASTEXITCODE) { exit 1 }
+            cmake --build build --config Release --parallel
+            if ($LASTEXITCODE) { exit 1 }
+            $exe = Get-ChildItem build -Recurse -Filter otzaria-voice.exe | Select-Object -First 1
+          } else {
+            # service/build.cmd calls vcvars64.bat from a fixed Visual Studio
+            # path; the MSVC environment is already set up here, so drop that line.
+            Get-Content service/build.cmd | Where-Object { $_ -notmatch 'vcvars64\.bat' } |
+              Set-Content service/ci-build.cmd -Encoding ascii
+            cmd /c service\ci-build.cmd
+            if ($LASTEXITCODE) { exit 1 }
+            $exe = Get-Item service/out/otzaria-voice.exe
+          }
+          if (-not $exe) { Write-Error 'otzaria-voice.exe not found'; exit 1 }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $exe.FullName dist/otzaria-voice.exe
+          Get-Item dist/otzaria-voice.exe | Format-List Name, Length
+
+      - name: מטמון חבילת הקול
+        uses: actions/cache@v4
+        with:
+          path: .cache/voice-pack
+          key: ${{ env.PACK_CACHE_KEY }}
+      - name: הורדת חבילת הקול ואימותה
+        shell: bash
+        run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}", $env:ProgramFiles -Filter ISCC.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE) { exit 1 }
+            $iscc = Get-ChildItem "${env:ProgramFiles(x86)}", $env:ProgramFiles -Filter ISCC.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $iscc) { Write-Error 'ISCC.exe not found'; exit 1 }
+          "ISCC=$($iscc.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: בניית המתקינים
+        shell: pwsh
+        run: |
+          $common = @("/DAppVersion=$env:VERSION", "/DSourceExe=$pwd\dist\otzaria-voice.exe", "/O$pwd\out")
+          & $env:ISCC /Qp @common installer\windows\otzaria-voice.iss
+          if ($LASTEXITCODE) { exit 1 }
+          & $env:ISCC /Qp @common "/DPackDir=$pwd\dist\pack" installer\windows\otzaria-voice.iss
+          if ($LASTEXITCODE) { exit 1 }
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: בדיקת התקנה שקטה
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          $pack = "$env:APPDATA\otzaria\stt\pack"
+          foreach ($variant in 'without-models', 'with-models') {
+            $setup = Get-Item "out\otzaria-voice-windows-x64-$variant-$env:VERSION.exe"
+            $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install-$variant.log" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { Get-Content "install-$variant.log"; Write-Error "$variant setup exited $($p.ExitCode)"; exit 1 }
+            if (-not (Test-Path "$dir\otzaria-voice.exe")) { Write-Error "$variant`: exe not installed"; exit 1 }
+            $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice -ErrorAction SilentlyContinue
+            if (-not $run) { Write-Error "$variant`: login start not registered"; exit 1 }
+            if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice')) { Write-Error "$variant`: no Installed-apps entry"; exit 1 }
+            Write-Host "$variant`: installed, login start = $($run.OtzariaVoice)"
+          }
+          foreach ($f in 'ctc\model.int8.onnx', 'ctc\vocab.json', 'ctc\preprocessor.json', 'lm\library.otzlm', 'LICENSES.txt', 'version.txt') {
+            if (-not (Test-Path "$pack\$f")) { Write-Error "voice pack: missing $f"; exit 1 }
+          }
+          if ((Get-Content "$pack\version.txt" -Raw).Trim() -ne '3') { Write-Error 'voice pack: version.txt is not 3'; exit 1 }
+          Write-Host 'voice pack installed'
+          Start-Process "$dir\otzaria-voice.exe" -ArgumentList '--uninstall', '--quiet' -Wait
+          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice') { Write-Error 'uninstall left the Installed-apps entry'; exit 1 }
+          Write-Host 'uninstalled'
+
+      - name: העלאה — עם מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-windows-x64-with-models
+          path: out/otzaria-voice-windows-x64-with-models-*.exe
+          compression-level: 0
+          if-no-files-found: error
+      - name: העלאה — בלי מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-windows-x64-without-models
+          path: out/otzaria-voice-windows-x64-without-models-*.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: detect
+    if: needs.detect.outputs.cmake == 'true' || needs.detect.outputs.stub == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x64, ort: linux-x64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64, ort: linux-aarch64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      STUB: ${{ needs.detect.outputs.stub }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: כלי בנייה
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build pkg-config libasound2-dev libpulse-dev
+
+      - name: בניית השירות
+        run: |
+          mkdir -p dist
+          if [ "$STUB" = true ]; then
+            echo "::warning::שירות מדומה - בדיקת אריזה בלבד, לא להתקנה."
+            cc -O2 -o dist/otzaria-voice installer/ci/stub-service.c
+          else
+            cmake -S service -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --parallel
+            bin="$(find build -type f -name otzaria-voice -perm -u+x | head -n1)"
+            [ -n "$bin" ] || { echo "::error::otzaria-voice not found under build/"; exit 1; }
+            cp "$bin" dist/otzaria-voice
+          fi
+          file dist/otzaria-voice
+
+      - name: ONNX Runtime
+        run: echo "ORT_DIR=$(bash installer/fetch-ort.sh ${{ matrix.ort }} "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
+
+      - name: מטמון חבילת הקול
+        uses: actions/cache@v4
+        with:
+          path: .cache/voice-pack
+          key: ${{ env.PACK_CACHE_KEY }}
+      - name: הורדת חבילת הקול ואימותה
+        run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
+
+      - name: אריזה (.deb ו-.tar.gz)
+        run: |
+          args=(--bin dist/otzaria-voice --version "$VERSION" --arch ${{ matrix.arch }} --ort "$ORT_DIR")
+          bash installer/linux/package.sh "${args[@]}" --out out/without-models
+          bash installer/linux/package.sh "${args[@]}" --out out/with-models --pack dist/pack
+          ls -l out/*
+
+      - name: בדיקת התקנה
+        run: |
+          deb="$(ls out/without-models/*.deb)"
+          dpkg-deb -I "$deb"
+          sudo apt-get install -y -q "./$deb"
+          test -x /usr/bin/otzaria-voice
+          test -x /usr/lib/otzaria-voice/otzaria-voice
+          test -e /usr/lib/otzaria-voice/libonnxruntime.so.1
+          test -f /etc/xdg/autostart/org.otzaria.voice.desktop
+          desktop-file-validate /etc/xdg/autostart/org.otzaria.voice.desktop 2>/dev/null || true
+          sudo apt-get remove -y -q otzaria-voice
+          dpkg-deb -c "$(ls out/with-models/*.deb)" | grep -q 'usr/share/otzaria-voice/pack/ctc/model.int8.onnx'
+          dpkg-deb -c "$(ls out/with-models/*.deb)" | grep -q 'usr/share/otzaria-voice/pack/version.txt'
+          # Per-user tarball (the stub exits at once; the real service keeps running until the job ends).
+          mkdir -p "$RUNNER_TEMP/tar" && tar -xzf out/without-models/*.tar.gz -C "$RUNNER_TEMP/tar"
+          "$RUNNER_TEMP/tar/otzaria-voice/install.sh"
+          test -x "$HOME/.local/bin/otzaria-voice" && test -f "$HOME/.config/autostart/org.otzaria.voice.desktop"
+          "$RUNNER_TEMP/tar/otzaria-voice/install.sh" --uninstall
+          test ! -e "$HOME/.local/bin/otzaria-voice"
+
+      - name: העלאה — עם מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-linux-${{ matrix.arch }}-with-models${{ env.STUB == 'true' && '-STUB' || '' }}
+          path: out/with-models/*
+          compression-level: 0
+          if-no-files-found: error
+      - name: העלאה — בלי מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-linux-${{ matrix.arch }}-without-models${{ env.STUB == 'true' && '-STUB' || '' }}
+          path: out/without-models/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64
+    needs: detect
+    if: needs.detect.outputs.cmake == 'true' || needs.detect.outputs.stub == 'true'
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      STUB: ${{ needs.detect.outputs.stub }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: בניית השירות
+        run: |
+          mkdir -p dist
+          if [ "$STUB" = true ]; then
+            echo "::warning::שירות מדומה - בדיקת אריזה בלבד, לא להתקנה."
+            cc -O2 -arch arm64 -o dist/otzaria-voice installer/ci/stub-service.c
+          else
+            command -v ninja >/dev/null || brew install ninja
+            cmake -S service -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+            cmake --build build --parallel
+            bin="$(find build -type f -name otzaria-voice -perm -u+x | head -n1)"
+            [ -n "$bin" ] || { echo "::error::otzaria-voice not found under build/"; exit 1; }
+            cp "$bin" dist/otzaria-voice
+          fi
+          file dist/otzaria-voice
+
+      - name: ONNX Runtime
+        run: echo "ORT_DIR=$(bash installer/fetch-ort.sh osx-arm64 "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
+
+      - name: מטמון חבילת הקול
+        uses: actions/cache@v4
+        with:
+          path: .cache/voice-pack
+          key: ${{ env.PACK_CACHE_KEY }}
+      - name: הורדת חבילת הקול ואימותה
+        run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
+
+      - name: אריזה (.pkg)
+        run: |
+          args=(--bin dist/otzaria-voice --version "$VERSION" --arch arm64 --ort "$ORT_DIR")
+          bash installer/macos/package.sh "${args[@]}" --out out/without-models
+          bash installer/macos/package.sh "${args[@]}" --out out/with-models --pack dist/pack
+          ls -l out/*
+
+      - name: בדיקת התקנה
+        run: |
+          pkgutil --payload-files "$(ls out/with-models/*.pkg)" | grep -q 'OtzariaVoice/pack/ctc/model.int8.onnx'
+          sudo installer -pkg "$(ls out/without-models/*.pkg)" -target /
+          test -x "/Applications/Otzaria Voice.app/Contents/MacOS/otzaria-voice"
+          test -e "/Applications/Otzaria Voice.app/Contents/Frameworks/libonnxruntime.dylib"
+          plutil -lint /Library/LaunchAgents/org.otzaria.voice.plist
+          codesign --verify --deep --strict "/Applications/Otzaria Voice.app"
+          sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
+          test ! -e "/Applications/Otzaria Voice.app"
+
+      - name: העלאה — עם מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-macos-arm64-with-models${{ env.STUB == 'true' && '-STUB' || '' }}
+          path: out/with-models/*.pkg
+          compression-level: 0
+          if-no-files-found: error
+      - name: העלאה — בלי מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-macos-arm64-without-models${{ env.STUB == 'true' && '-STUB' || '' }}
+          path: out/without-models/*.pkg
+          if-no-files-found: error
+
+  android:
+    name: Android
+    needs: detect
+    if: needs.detect.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: מטמון חבילת הקול
+        uses: actions/cache@v4
+        with:
+          path: .cache/voice-pack
+          key: ${{ env.PACK_CACHE_KEY }}
+      - name: הורדת חבילת הקול ואימותה
+        run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
+
+      # Both APKs are debug-signed (installable by side-loading; no release key in CI).
+      # The with-models APK carries the voice pack in assets/pack/ of the "app" module.
+      - name: בניית ה-APK
+        working-directory: service/android
+        run: |
+          if [ -f ./gradlew ]; then chmod +x ./gradlew; g=./gradlew; else g=gradle; fi
+          out="$GITHUB_WORKSPACE/out"; mkdir -p "$out"
+          apk() { find . -path '*/build/outputs/apk/*' -name '*.apk' ! -name '*androidTest*' -newer "$1" | head -n1; }
+          touch "$RUNNER_TEMP/t0"
+          $g --no-daemon assembleDebug
+          a="$(apk "$RUNNER_TEMP/t0")"; [ -n "$a" ] || { echo "::error::no APK built"; exit 1; }
+          cp "$a" "$out/otzaria-voice-android-without-models-$VERSION.apk"
+          assets=app/src/main/assets/pack
+          rm -rf "$assets" && mkdir -p "$assets" && cp -a "$GITHUB_WORKSPACE/dist/pack/." "$assets/"
+          touch "$RUNNER_TEMP/t1"
+          $g --no-daemon assembleDebug
+          a="$(apk "$RUNNER_TEMP/t1")"; [ -n "$a" ] || { echo "::error::no APK built"; exit 1; }
+          cp "$a" "$out/otzaria-voice-android-with-models-$VERSION.apk"
+          rm -rf "$assets"
+          ls -l "$out"
+
+      - name: העלאה — עם מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-android-with-models
+          path: out/otzaria-voice-android-with-models-*.apk
+          compression-level: 0
+          if-no-files-found: error
+      - name: העלאה — בלי מודלים
+        uses: actions/upload-artifact@v4
+        with:
+          name: otzaria-voice-android-without-models
+          path: out/otzaria-voice-android-without-models-*.apk
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [detect, plugin, windows, linux, macos, android]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      !cancelled() && !contains(needs.*.result, 'failure') &&
+      needs.detect.outputs.stub != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v${{ needs.detect.outputs.version }}
+    steps:
+      - name: האם ה-Release כבר קיים
+        id: check
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ה-Release $TAG כבר קיים - מדלג (כדי לפרסם גרסה חדשה מעלים את version ב-plugin/manifest.json)."
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: הורדת כל הקבצים
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+
+      - name: יצירת ה-Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          ls -l files
+          (cd files && sha256sum * >SHA256SUMS.txt)
+          cat >notes.md <<EOF
+          ## הקלדה בדיבור לאוצריא — $TAG
+
+          **התוסף:** קובץ ה-\`.otzplugin\`. באוצריא: כלים ← תוספים ← התקנת תוסף, ובוחרים את הקובץ.
+
+          **שירות הדיבור** (חובה, התוסף משתמש בו). לכל מערכת שני מתקינים:
+          - \`with-models\` — כולל את חבילת הקול (כ-330 מגה-בייט), עובד מיד גם בלי אינטרנט.
+          - \`without-models\` — קטן; חבילת הקול תרד בשימוש הראשון.
+
+          | מערכת | קובץ |
+          |---|---|
+          | Windows | \`otzaria-voice-windows-x64-…exe\` |
+          | Linux | \`.deb\` (אובונטו/דביאן) או \`.tar.gz\` (כל הפצה) |
+          | macOS (Apple silicon) | \`.pkg\` — בפעם הראשונה: קליק ימני ← פתיחה |
+          | Android | \`.apk\` |
+
+          הוראות מלאות: https://github.com/$GITHUB_REPOSITORY#readme
+
+          טביעות SHA-256 של כל הקבצים: \`SHA256SUMS.txt\`.
+          EOF
+          gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file notes.md

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Otzaria Voice
+Name[he]=שירות הדיבור של אוצריא
+Comment=Local Hebrew speech recognition for Otzaria plugins
+Comment[he]=זיהוי דיבור עברי מקומי לתוספים של אוצריא
+Exec=@LAUNCHER@ --serve
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

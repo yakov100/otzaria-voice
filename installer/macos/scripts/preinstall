@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stops a running copy (an older version) before its files are replaced.
+user="$(stat -f %Su /dev/console 2>/dev/null)"
+if [ -n "$user" ] && [ "$user" != "root" ]; then
+  uid="$(id -u "$user")"
+  launchctl bootout "gui/$uid/org.otzaria.voice" 2>/dev/null || true
+fi
+exit 0
