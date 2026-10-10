@@ -9,8 +9,9 @@
 #       Contents/MacOS/otzaria-voice     (an app bundle so macOS can ask for
 #       Contents/Frameworks/libonnxruntime*.dylib    microphone permission)
 #   /Library/LaunchAgents/org.otzaria.voice.plist    start at login: "--serve"
-#   /Library/Application Support/OtzariaVoice/pack/  voice pack (with-models only;
-#                                    the LaunchAgent sets OTZARIA_VOICE_PACK_DIR)
+#       Contents/Resources/pack/     voice pack (with-models only; the service
+#                                    reads it after any per-user pack, so a
+#                                    newer downloaded pack takes over)
 #   /Library/Application Support/OtzariaVoice/uninstall.sh
 #
 # The bundle is ad-hoc signed only (no Apple Developer ID): the first time,
@@ -71,16 +72,10 @@ sed -e "s|@VERSION@|$version|g" "$here/Info.plist.in" >"$app/Contents/Info.plist
   fi
 } >"$app/Contents/Resources/LICENSES.txt"
 
-pack_env=""
 if [ -n "$pack" ]; then
-  cp -a "$pack" "$support/pack"
-  pack_env="    <key>OTZARIA_VOICE_PACK_DIR</key>
-    <string>/Library/Application Support/OtzariaVoice/pack</string>"
+  cp -a "$pack" "$app/Contents/Resources/pack"
 fi
-# Replace the @PACK_ENV@ line (empty for the without-models variant).
-# (Passed through the environment: BSD awk rejects newlines in -v values.)
-PACK_ENV="$pack_env" awk '{ if ($0 == "@PACK_ENV@") { if (ENVIRON["PACK_ENV"] != "") print ENVIRON["PACK_ENV"] } else print }' \
-  "$here/org.otzaria.voice.plist.in" >"$payload/Library/LaunchAgents/org.otzaria.voice.plist"
+sed -e "s|@VERSION@|$version|g" "$here/org.otzaria.voice.plist.in" >"$payload/Library/LaunchAgents/org.otzaria.voice.plist"
 plutil -lint "$payload/Library/LaunchAgents/org.otzaria.voice.plist" "$app/Contents/Info.plist"
 install -m755 "$here/uninstall.sh" "$support/uninstall.sh"
 

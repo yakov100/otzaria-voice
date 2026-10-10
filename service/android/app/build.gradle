@@ -45,5 +45,5 @@ android {
 dependencies {
     // Microsoft's ONNX Runtime for Android: ships libonnxruntime.so, whose C API
     // the native service loads at run time (as Otzaria's copy on the desktop).
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.28.0'
 }

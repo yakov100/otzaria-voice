@@ -13,7 +13,6 @@
   <dict>
     <key>DYLD_FALLBACK_LIBRARY_PATH</key>
     <string>/Applications/Otzaria Voice.app/Contents/Frameworks:/usr/local/lib:/usr/lib</string>
-@PACK_ENV@
   </dict>
   <key>RunAtLoad</key>
   <true/>
