@@ -37,6 +37,7 @@
 
 #include "json.h"
 #include "pack.h"
+#include "talmud_phrases.h"
 #include "util.h"
 
 namespace service {
@@ -203,6 +204,7 @@ struct Engine {
   std::unique_ptr<voice::NgramLm> lm;
   std::unique_ptr<voice::PhraseSet> phrases;
   std::unique_ptr<voice::CtcDecoder> decoder;
+  std::unique_ptr<voice::PhraseRescorer> rescorer;  // null = second pass off
 };
 
 std::mutex engineMu;
@@ -230,13 +232,19 @@ Engine& loadEngine() {
   if (auto v = platform::env("OTZARIA_VOICE_PHRASE_TRIPLE"); !v.empty()) weights.phraseTriple = atof(v.c_str());
   e->decoder = std::make_unique<voice::CtcDecoder>(e->model->vocab(), e->model->blank(), *e->lm,
                                                    e->phrases.get(), weights);
+  // Evaluation only: OTZARIA_VOICE_NO_RESCORE=1 turns the second pass off.
+  if (platform::env("OTZARIA_VOICE_NO_RESCORE").empty())
+    e->rescorer = std::make_unique<voice::PhraseRescorer>(
+        e->model->vocab(), e->model->blank(), *e->lm, voice::talmudPhrases(),
+        voice::PhraseRescorer::loadSounds(packDir / "phrases" / "talmud_sounds.tsv"));
   engine = std::move(e);
   platform::log("engine loaded in " +
                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - t0)
                                    .count()) +
                 " ms, ort " + platform::toUtf8(ort) + ", phrases " +
-                std::to_string(engine->phrases->size()));
+                std::to_string(engine->phrases->size()) + ", sounded phrases " +
+                std::to_string(engine->rescorer ? engine->rescorer->sounded() : 0));
   return *engine;
 }
 
@@ -461,7 +469,7 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
                           const std::function<bool()>& alive, const std::function<void()>& onReady,
                           std::chrono::seconds maxDuration, AutoEnd autoEnd) {
   Engine& e = loadEngine();
-  voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context);
+  voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context, e.rescorer.get());
   onReady();
   const auto started = std::chrono::steady_clock::now();
   auto lastUpdate = started;
@@ -607,9 +615,18 @@ int evaluate(const platform::Path& manifest, const platform::Path& outPath) {
     auto pcm = readWav(base / platform::fromUtf8(row["wav"].str()));
     auto t0 = std::chrono::steady_clock::now();
     auto r = e.model->run(pcm.data(), pcm.size());
-    std::string offline = r.frames ? e.decoder->display(e.decoder->decode(r, 16, {}, {})) : "";
+    std::string offline;
+    if (r.frames) {
+      std::vector<std::string> words;
+      for (auto& w : util::split(e.decoder->decode(r, 16, {}, {}), ' '))
+        if (!w.empty()) words.push_back(std::move(w));
+      if (e.rescorer) words = e.rescorer->rescore(r, std::move(words));
+      std::string text;
+      for (const auto& w : words) text += (text.empty() ? "" : " ") + w;
+      offline = e.decoder->display(text);
+    }
     auto t1 = std::chrono::steady_clock::now();
-    voice::LiveTranscriber live(*e.model, *e.decoder, {}, {});
+    voice::LiveTranscriber live(*e.model, *e.decoder, {}, {}, e.rescorer.get());
     std::map<int, std::string> segs;
     // Half a second of silence after the end, as when the user stops talking.
     pcm.insert(pcm.end(), 8000, 0.0f);

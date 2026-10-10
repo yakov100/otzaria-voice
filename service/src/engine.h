@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <set>
 #include <unordered_set>
@@ -109,6 +110,9 @@ class PhraseSet {
 
 struct LmWeights {
   double alpha = 0.5, beta = 2.0, oov = -8.0, nonPrefix = -6.0, hotword = 3.0, prune = -12.0;
+  // Each further letter of a word already off the known prefixes: gluing known
+  // words onto an unknown one ("ומנתתאמרהדתניא...") is then not free.
+  double oovChar = -1.0;
   double phrasePair = 0.0, phraseTriple = 0.0;  // bonus for continuing a fixed phrase
 };
 
@@ -130,6 +134,50 @@ class CtcDecoder {
   LmWeights w_;
 };
 
+// Second pass over a finished segment: tries known Talmud phrases over its spans.
+// The beam builds words letter by letter and prunes early, so "הכא במאי עסקינן
+// כגון" may never be tried although the whole sentence scores better with it. A
+// candidate is a span whose consonant skeleton is close to a phrase; a swap is kept
+// only when acoustic CTC log-prob + LM of the whole sentence rises. [sounds] gives
+// how a phrase sounds (yeshivish, "תו שמע" for "תא שמע"): the audio is scored
+// against the best spelling, the LM and the output use the phrase as written.
+// Port of lib/voice_input/engine/phrase_rescorer.dart in Otzaria (spec:
+// tool/voice_eval/phrase_rescore.py there).
+class PhraseRescorer {
+ public:
+  using Sounds = std::map<std::string, std::vector<std::string>>;
+  PhraseRescorer(const std::vector<std::string>& vocab, int blank, const NgramLm& lm,
+                 const std::vector<std::string>& phrases, const Sounds& sounds = {},
+                 LmWeights weights = {});
+  std::vector<std::string> rescore(const CtcOutput& out, std::vector<std::string> words) const;
+  // phrases/talmud_sounds.tsv of the pack: phrase TAB sound [TAB sound]; # = comment.
+  // A missing file is empty.
+  static Sounds loadSounds(const Path& path);
+  size_t sounded() const { return sounded_; }
+
+ private:
+  struct Spelling {
+    std::vector<std::string> words;
+    std::u32string skeleton;
+  };
+  struct Phrase {
+    std::vector<std::string> words;
+    std::string norm;
+    std::vector<Spelling> spellings;  // the phrase itself first
+  };
+  std::vector<int> labels(const std::vector<std::string>& words) const;
+  double lmScore(const std::vector<std::string>& words) const;
+  double ctcLogProb(const std::vector<double>& p, int frames, int v,
+                    const std::vector<int>& labels) const;
+
+  std::map<std::string, int> index_;
+  int blank_;
+  const NgramLm& lm_;
+  LmWeights w_;
+  std::vector<Phrase> phrases_;
+  size_t sounded_ = 0;
+};
+
 struct LiveUpdate {
   int segment;
   std::string text;
@@ -138,20 +186,23 @@ struct LiveUpdate {
 
 class LiveTranscriber {
  public:
+  // [rescorer]: second pass at the end of each segment; null = none. The final
+  // update may then revise committed words once.
   LiveTranscriber(CtcModel& model, const CtcDecoder& decoder, std::set<std::string> hotwords,
-                  std::vector<std::string> context);
+                  std::vector<std::string> context, const PhraseRescorer* rescorer = nullptr);
   std::vector<LiveUpdate> add(const float* chunk, size_t n);
   std::vector<LiveUpdate> finish();
 
  private:
   void step(const float* part, size_t n, std::vector<LiveUpdate>& out);
-  std::vector<std::string> recognize(int beam);
+  std::vector<std::string> recognize(int beam, CtcOutput* keep = nullptr);
   void update(std::vector<LiveUpdate>& out);
   void endSegment(std::vector<LiveUpdate>& out);
   std::string display(const std::vector<std::string>& words, bool lastIsDraft) const;
 
   CtcModel& model_;
   const CtcDecoder& decoder_;
+  const PhraseRescorer* rescorer_;
   std::set<std::string> hotwords_;
   std::vector<std::string> context_;
 

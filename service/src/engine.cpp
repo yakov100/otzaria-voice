@@ -537,10 +537,12 @@ std::string CtcDecoder::decode(const CtcOutput& out, int beamWidth,
           continue;
         }
         const std::string grown = b.partialNorm + vocabNorm_[c];
+        // Leaving the known prefixes costs once; each further letter of a word that
+        // is already unknown costs a little, so gluing known words onto an unknown
+        // one is not cheaper than spacing them.
         double pen = 0;
-        if ((b.partialNorm.empty() || lm_.isPrefix(b.partialNorm)) && !lm_.isPrefix(grown) &&
-            !hotwords.count(grown))
-          pen = w_.nonPrefix;
+        if (!lm_.isPrefix(grown) && !hotwords.count(grown))
+          pen = (b.partialNorm.empty() || lm_.isPrefix(b.partialNorm)) ? w_.nonPrefix : w_.oovChar;
         const std::string text = b.text + vocab_[c];
         const bool fresh = next.find(text) == next.end();
         Beam& e = at(text, b);
@@ -589,6 +591,237 @@ std::string CtcDecoder::display(const std::string& text) const {
   return out;
 }
 
+// ---------------------------------------------------------------- phrase rescorer
+
+namespace {
+std::u32string toU32(const std::string& s) {
+  std::u32string out;
+  for (size_t i = 0; i < s.size();) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    const size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
+    char32_t cp = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
+    for (size_t k = 1; k < n && i + k < s.size(); k++) cp = (cp << 6) | (s[i + k] & 0x3F);
+    out += cp;
+    i += n;
+  }
+  return out;
+}
+
+// Letters the model swaps or drops by sound; only to pick candidates.
+std::u32string skeletonOf(const std::string& text) {
+  std::u32string out;
+  for (char32_t c : toU32(text)) {
+    switch (c) {
+      case 0x05DA: c = 0x05DB; break;  // ך -> כ
+      case 0x05DD: c = 0x05DE; break;  // ם -> מ
+      case 0x05DF: c = 0x05E0; break;  // ן -> נ
+      case 0x05E3: c = 0x05E4; break;  // ף -> פ
+      case 0x05E5: c = 0x05E6; break;  // ץ -> צ
+    }
+    switch (c) {
+      case 0x05D0: case 0x05D4: case 0x05E2: case 0x05D5: case 0x05D9:  // א ה ע ו י
+      case U'"': case U'\'': case U' ':
+        continue;
+      case 0x05D7: case 0x05E7: c = 0x05DB; break;  // ח ק -> כ
+      case 0x05D8: case 0x05D3: c = 0x05EA; break;  // ט ד -> ת
+      case 0x05E1: c = 0x05E9; break;               // ס -> ש
+    }
+    out += c;
+  }
+  return out;
+}
+
+size_t editDistance(const std::u32string& a, const std::u32string& b) {
+  std::vector<size_t> d(b.size() + 1);
+  for (size_t j = 0; j <= b.size(); j++) d[j] = j;
+  for (size_t i = 1; i <= a.size(); i++) {
+    size_t prev = d[0];
+    d[0] = i;
+    for (size_t j = 1; j <= b.size(); j++) {
+      const size_t cur = d[j];
+      d[j] = std::min({d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] == b[j - 1] ? 0 : 1)});
+      prev = cur;
+    }
+  }
+  return d[b.size()];
+}
+
+std::vector<std::string> words(const std::string& s) {
+  std::vector<std::string> out;
+  for (auto& w : util::split(s, ' '))
+    if (!w.empty()) out.push_back(std::move(w));
+  return out;
+}
+
+std::string join(const std::vector<std::string>& ws, size_t from, size_t to) {
+  std::string s;
+  for (size_t i = from; i < to; i++) {
+    if (i > from) s += ' ';
+    s += ws[i];
+  }
+  return s;
+}
+
+constexpr size_t kMaxSpan = 6;
+constexpr int kMaxRounds = 4;
+constexpr double kLoose = 0.5;
+}  // namespace
+
+PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
+                               const NgramLm& lm, const std::vector<std::string>& phrases,
+                               const Sounds& sounds, LmWeights weights)
+    : blank_(blank), lm_(lm), w_(weights) {
+  for (size_t i = 0; i < vocab.size(); i++) index_.emplace(vocab[i], int(i));
+  for (const auto& p : phrases) {
+    Phrase ph{words(p), normalizeLmWord(p), {}};
+    if (ph.words.size() < 2 || skeletonOf(p).empty()) continue;
+    std::vector<std::string> spellings{p};
+    if (auto it = sounds.find(p); it != sounds.end())
+      spellings.insert(spellings.end(), it->second.begin(), it->second.end());
+    for (const auto& s : spellings) {
+      auto sw = words(s);
+      if (sw.size() == ph.words.size() && !skeletonOf(s).empty())
+        ph.spellings.push_back({std::move(sw), skeletonOf(s)});
+    }
+    if (ph.spellings.size() > 1) sounded_++;
+    phrases_.push_back(std::move(ph));
+  }
+}
+
+PhraseRescorer::Sounds PhraseRescorer::loadSounds(const Path& path) {
+  Sounds out;
+  std::ifstream f(path, std::ios::binary);
+  std::string line;
+  while (std::getline(f, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (util::trim(line).empty() || line[0] == '#') continue;
+    auto parts = util::split(line, '\t');
+    auto& list = out[util::trim(parts[0])];
+    for (size_t i = 1; i < parts.size(); i++)
+      if (!util::trim(parts[i]).empty()) list.push_back(util::trim(parts[i]));
+  }
+  return out;
+}
+
+std::vector<int> PhraseRescorer::labels(const std::vector<std::string>& ws) const {
+  std::vector<int> out;
+  const auto space = index_.find(" ");
+  for (size_t k = 0; k < ws.size(); k++) {
+    if (k > 0 && space != index_.end()) out.push_back(space->second);
+    // The last letter of a word in its final form, as the model writes it.
+    for (const auto& ch : util::utf8Chars(restoreFinal(ws[k])))
+      if (auto it = index_.find(ch); it != index_.end()) out.push_back(it->second);
+  }
+  return out;
+}
+
+double PhraseRescorer::lmScore(const std::vector<std::string>& ws) const {
+  const double ln10 = std::log(10.0);
+  int p2 = -1, p1 = -1;
+  double s = 0;
+  for (const auto& raw : ws) {
+    std::string w;
+    for (char c : raw)
+      if (c != '"' && c != '\'') w += c;
+    const int id = lm_.idOf(normalizeLmWord(w));
+    s += id < 0 ? w_.oov + w_.beta : w_.alpha * lm_.score(p2, p1, id) * ln10 + w_.beta;
+    p2 = p1;
+    p1 = id;
+  }
+  return s;
+}
+
+// log P(labels | audio): the CTC forward pass in probabilities, normalized at
+// every frame (no exp/log in the inner loop).
+double PhraseRescorer::ctcLogProb(const std::vector<double>& p, int frames, int v,
+                                  const std::vector<int>& labels) const {
+  const double ninf = -std::numeric_limits<double>::infinity();
+  const size_t s = labels.size() * 2 + 1;
+  std::vector<int> ext(s, blank_);
+  for (size_t k = 0; k < labels.size(); k++) ext[2 * k + 1] = labels[k];
+  // A label may skip the blank before it unless it repeats the label two back.
+  std::vector<char> skip(s, 0);
+  for (size_t i = 2; i < s; i++) skip[i] = ext[i] != blank_ && ext[i] != ext[i - 2];
+  std::vector<double> alpha(s, 0.0), next(s, 0.0);
+  alpha[0] = p[blank_];
+  if (s > 1) alpha[1] = p[ext[1]];
+  double logScale = 0;
+  for (int t = 1; t < frames; t++) {
+    double sum = 0;
+    for (size_t i = 0; i < s; i++) sum += alpha[i];
+    if (sum <= 0) return ninf;
+    logScale += std::log(sum);
+    const double* row = &p[size_t(t) * v];
+    for (size_t i = 0; i < s; i++) {
+      double a = alpha[i];
+      if (i >= 1) a += alpha[i - 1];
+      if (skip[i]) a += alpha[i - 2];
+      next[i] = a / sum * row[ext[i]];
+    }
+    std::swap(alpha, next);
+  }
+  const double end = s > 1 ? alpha[s - 1] + alpha[s - 2] : alpha[s - 1];
+  return end <= 0 ? ninf : logScale + std::log(end);
+}
+
+std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
+                                                 std::vector<std::string> written) const {
+  if (out.frames == 0 || written.empty()) return written;
+  const int v = out.vocab;
+  std::vector<double> probs(out.logProbs.size());
+  for (size_t k = 0; k < probs.size(); k++) probs[k] = std::exp(double(out.logProbs[k]));
+  // The same candidate comes back from several spans and every round.
+  std::unordered_map<std::string, double> memo;
+  auto total = [&](const std::vector<std::string>& w, const std::vector<std::string>& s) {
+    const std::string key = join(s, 0, s.size()) + '\x01' + join(w, 0, w.size());
+    auto it = memo.find(key);
+    if (it != memo.end()) return it->second;
+    const double score = ctcLogProb(probs, out.frames, v, labels(s)) + lmScore(w);
+    memo.emplace(key, score);
+    return score;
+  };
+
+  // Each word is written one way and scored against the audio another; only the
+  // words of a swapped-in phrase differ.
+  std::vector<std::string> sounded = written;
+  for (int round = 0; round < kMaxRounds; round++) {
+    double best = total(written, sounded);
+    std::vector<std::string> bestW, bestS;
+    for (size_t i = 0; i < written.size(); i++) {
+      for (size_t j = i + 1; j <= std::min(written.size(), i + kMaxSpan); j++) {
+        const std::string span = join(written, i, j);
+        const std::u32string ss = skeletonOf(span);
+        const std::string spanNorm = normalizeLmWord(span);
+        for (const auto& ph : phrases_) {
+          if (spanNorm == ph.norm) continue;
+          for (const auto& sp : ph.spellings) {
+            const double diff = double(ss.size()) - double(sp.skeleton.size());
+            if (std::abs(diff) > 3 ||
+                double(editDistance(ss, sp.skeleton)) > kLoose * double(sp.skeleton.size()))
+              continue;
+            std::vector<std::string> cw(written.begin(), written.begin() + i);
+            cw.insert(cw.end(), ph.words.begin(), ph.words.end());
+            cw.insert(cw.end(), written.begin() + j, written.end());
+            std::vector<std::string> cs(sounded.begin(), sounded.begin() + i);
+            cs.insert(cs.end(), sp.words.begin(), sp.words.end());
+            cs.insert(cs.end(), sounded.begin() + j, sounded.end());
+            const double s = total(cw, cs);
+            if (s > best) {
+              best = s;
+              bestW = std::move(cw);
+              bestS = std::move(cs);
+            }
+          }
+        }
+      }
+    }
+    if (bestW.empty()) break;
+    written = std::move(bestW);
+    sounded = std::move(bestS);
+  }
+  return written;
+}
+
 // ---------------------------------------------------------------- live transcriber
 
 namespace {
@@ -601,8 +834,9 @@ constexpr double kMinSpeechSec = 0.25;
 }  // namespace
 
 LiveTranscriber::LiveTranscriber(CtcModel& model, const CtcDecoder& decoder,
-                                 std::set<std::string> hotwords, std::vector<std::string> context)
-    : model_(model), decoder_(decoder), hotwords_(std::move(hotwords)),
+                                 std::set<std::string> hotwords, std::vector<std::string> context,
+                                 const PhraseRescorer* rescorer)
+    : model_(model), decoder_(decoder), rescorer_(rescorer), hotwords_(std::move(hotwords)),
       context_(std::move(context)) {}
 
 std::vector<LiveUpdate> LiveTranscriber::add(const float* chunk, size_t n) {
@@ -666,12 +900,13 @@ void LiveTranscriber::step(const float* part, size_t n, std::vector<LiveUpdate>&
   }
 }
 
-std::vector<std::string> LiveTranscriber::recognize(int beam) {
-  const CtcOutput r = model_.run(segment_.data(), segment_.size());
+std::vector<std::string> LiveTranscriber::recognize(int beam, CtcOutput* keep) {
+  CtcOutput r = model_.run(segment_.data(), segment_.size());
   if (r.frames == 0) return {};
   std::vector<std::string> words;
   for (auto& w : util::split(decoder_.decode(r, beam, hotwords_, context_), ' '))
     if (!w.empty()) words.push_back(std::move(w));
+  if (keep) *keep = std::move(r);
   return words;
 }
 
@@ -694,11 +929,14 @@ void LiveTranscriber::update(std::vector<LiveUpdate>& out) {
 void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
   inSpeech_ = false;
   if (speechSec_ >= kMinSpeechSec) {
-    const auto finalWords = recognize(16);
-    // Committed words never change; the final decode only completes what follows.
+    CtcOutput r;
+    const auto finalWords = recognize(16, &r);
+    // The final decode completes what follows the committed words; the second
+    // pass sees the whole segment and may revise them too.
     std::vector<std::string> words = committed_;
     if (finalWords.size() > committed_.size())
       words.insert(words.end(), finalWords.begin() + committed_.size(), finalWords.end());
+    if (rescorer_ && r.frames) words = rescorer_->rescore(r, std::move(words));
     out.push_back({segmentId_, display(words, false), true});
     for (const auto& w : words) context_.push_back(normalizeLmWord(w));
     if (context_.size() > 2) context_.erase(context_.begin(), context_.end() - 2);
