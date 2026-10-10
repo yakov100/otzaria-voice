@@ -514,9 +514,37 @@ jobs:
           path: out/otzaria-voice-android-without-models-*.apk
           if-no-files-found: error
 
+  android-test:
+    name: Android — בדיקה באמולטור
+    needs: [detect, android]
+    if: needs.detect.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: otzaria-voice-android-with-models
+          path: apk
+      - name: הפעלת KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: התקנה והכתבה באמולטור
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disk-size: 6G
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          script: bash installer/ci/android-smoke.sh "$(ls apk/*.apk)"
+
   release:
     name: GitHub Release
-    needs: [detect, plugin, windows, linux, macos, android]
+    needs: [detect, plugin, windows, linux, macos, android, android-test]
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       !cancelled() && !contains(needs.*.result, 'failure')
