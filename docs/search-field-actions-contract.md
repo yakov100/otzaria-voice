@@ -125,3 +125,12 @@ instance only. Without the granted permission: `permission_denied`.
 `app.getInfo` version ≥ the release that ships this, or simply: if the call
 `search.setFieldText` returns `error.unknown_method`, the host does not support
 it. The plugin must keep working without it.
+
+Plugin side (as built): runtime detection alone is not enough, because one
+package cannot serve both hosts — 0.9.98 rejects the unknown permission
+`search.field_actions` at install, and the packager rejects calls to
+`search.setFieldText` & co. under `minAppVersion` 0.9.98. So `plugin/build.py`
+produces two packages from one source: `released` (0.9.98, toolbar button +
+shortcut, no field-action code) and `next` (0.9.99, adds the permission, the
+`searchFieldActions` item with `fields: fullText, library, inBook, findRef`, and
+the handlers). The next package keeps the toolbar button and shortcut too.
