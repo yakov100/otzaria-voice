@@ -1,0 +1,5 @@
+// Otzaria voice service for Android: the same C++ service as on the desktop
+// (../CMakeLists.txt, built as libotzaria_voice.so), run by a foreground service.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
