@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -47,7 +47,7 @@ jobs:
       stub: ${{ steps.d.outputs.stub }}
       android: ${{ steps.d.outputs.android }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: d
         name: גרסה ומה אפשר לבנות
         env:
@@ -78,7 +78,7 @@ jobs:
       HAS_STORE_SECRETS: ${{ secrets.OTZARIA_USER != '' && secrets.OTZARIA_PASSWORD != '' }}
       PUBLISH: ${{ inputs.publish || 'auto' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The official Otzaria action: the same checks as the store, and the .otzplugin.
       - name: ולידציה ואריזה
@@ -90,7 +90,7 @@ jobs:
           publish: 'false'
 
       - name: העלאת התוסף
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-plugin
           path: ${{ steps.build.outputs.plugin-file }}
@@ -131,7 +131,7 @@ jobs:
     env:
       VERSION: ${{ needs.detect.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -160,7 +160,7 @@ jobs:
           Get-Item dist/otzaria-voice.exe | Format-List Name, Length
 
       - name: מטמון חבילת הקול
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/voice-pack
           key: ${{ env.PACK_CACHE_KEY }}
@@ -192,13 +192,23 @@ jobs:
 
       - name: בדיקת התקנה שקטה
         shell: pwsh
+        timeout-minutes: 15
         run: |
+          # Start-Process -Wait would also wait for the service the installer
+          # starts (it never exits), so wait for the process itself only.
+          function Invoke-Wait($file, $argList) {
+            $p = Start-Process $file -ArgumentList $argList -PassThru
+            $null = $p.Handle  # keeps ExitCode readable after exit
+            if (-not $p.WaitForExit(600000)) { Write-Error "$file did not finish in 10 minutes"; exit 1 }
+            return $p.ExitCode
+          }
           $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
           $pack = "$env:APPDATA\otzaria\stt\pack"
           foreach ($variant in 'without-models', 'with-models') {
             $setup = Get-Item "out\otzaria-voice-windows-x64-$variant-$env:VERSION.exe"
-            $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install-$variant.log" -Wait -PassThru
-            if ($p.ExitCode -ne 0) { Get-Content "install-$variant.log"; Write-Error "$variant setup exited $($p.ExitCode)"; exit 1 }
+            $code = Invoke-Wait $setup.FullName @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install-$variant.log")
+            Get-Content "install-$variant.log" -Tail 15
+            if ($code -ne 0) { Get-Content "install-$variant.log"; Write-Error "$variant setup exited $code"; exit 1 }
             if (-not (Test-Path "$dir\otzaria-voice.exe")) { Write-Error "$variant`: exe not installed"; exit 1 }
             $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice -ErrorAction SilentlyContinue
             if (-not $run) { Write-Error "$variant`: login start not registered"; exit 1 }
@@ -210,19 +220,20 @@ jobs:
           }
           if ((Get-Content "$pack\version.txt" -Raw).Trim() -ne '3') { Write-Error 'voice pack: version.txt is not 3'; exit 1 }
           Write-Host 'voice pack installed'
-          Start-Process "$dir\otzaria-voice.exe" -ArgumentList '--uninstall', '--quiet' -Wait
+          $code = Invoke-Wait "$dir\otzaria-voice.exe" @('--uninstall', '--quiet')
+          if ($code -ne 0) { Write-Error "uninstall exited $code"; exit 1 }
           if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice') { Write-Error 'uninstall left the Installed-apps entry'; exit 1 }
           Write-Host 'uninstalled'
 
       - name: העלאה — עם מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-windows-x64-with-models
           path: out/otzaria-voice-windows-x64-with-models-*.exe
           compression-level: 0
           if-no-files-found: error
       - name: העלאה — בלי מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-windows-x64-without-models
           path: out/otzaria-voice-windows-x64-without-models-*.exe
@@ -243,7 +254,7 @@ jobs:
       VERSION: ${{ needs.detect.outputs.version }}
       STUB: ${{ needs.detect.outputs.stub }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: כלי בנייה
         run: |
@@ -269,7 +280,7 @@ jobs:
         run: echo "ORT_DIR=$(bash installer/fetch-ort.sh ${{ matrix.ort }} "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
 
       - name: מטמון חבילת הקול
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/voice-pack
           key: ${{ env.PACK_CACHE_KEY }}
@@ -304,14 +315,14 @@ jobs:
           test ! -e "$HOME/.local/bin/otzaria-voice"
 
       - name: העלאה — עם מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-linux-${{ matrix.arch }}-with-models${{ env.STUB == 'true' && '-STUB' || '' }}
           path: out/with-models/*
           compression-level: 0
           if-no-files-found: error
       - name: העלאה — בלי מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-linux-${{ matrix.arch }}-without-models${{ env.STUB == 'true' && '-STUB' || '' }}
           path: out/without-models/*
@@ -326,7 +337,7 @@ jobs:
       VERSION: ${{ needs.detect.outputs.version }}
       STUB: ${{ needs.detect.outputs.stub }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: בניית השירות
         run: |
@@ -348,7 +359,7 @@ jobs:
         run: echo "ORT_DIR=$(bash installer/fetch-ort.sh osx-arm64 "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
 
       - name: מטמון חבילת הקול
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/voice-pack
           key: ${{ env.PACK_CACHE_KEY }}
@@ -374,14 +385,14 @@ jobs:
           test ! -e "/Applications/Otzaria Voice.app"
 
       - name: העלאה — עם מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-macos-arm64-with-models${{ env.STUB == 'true' && '-STUB' || '' }}
           path: out/with-models/*.pkg
           compression-level: 0
           if-no-files-found: error
       - name: העלאה — בלי מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-macos-arm64-without-models${{ env.STUB == 'true' && '-STUB' || '' }}
           path: out/without-models/*.pkg
@@ -395,15 +406,15 @@ jobs:
     env:
       VERSION: ${{ needs.detect.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: מטמון חבילת הקול
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/voice-pack
           key: ${{ env.PACK_CACHE_KEY }}
@@ -432,14 +443,14 @@ jobs:
           ls -l "$out"
 
       - name: העלאה — עם מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-android-with-models
           path: out/otzaria-voice-android-with-models-*.apk
           compression-level: 0
           if-no-files-found: error
       - name: העלאה — בלי מודלים
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otzaria-voice-android-without-models
           path: out/otzaria-voice-android-without-models-*.apk
@@ -471,7 +482,7 @@ jobs:
 
       - name: הורדת כל הקבצים
         if: steps.check.outputs.exists == 'false'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: files
           merge-multiple: true
