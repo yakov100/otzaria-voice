@@ -1,6 +1,7 @@
 service/out/
 out/
 build/
+plugin/packages/
 service/android/.gradle/
 service/android/app/build/
 service/android/app/.cxx/
