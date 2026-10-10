@@ -43,14 +43,23 @@ extern std::atomic<bool> microphoneAllowed;
 // Marks the engine as used now (idle unloading counts from here).
 void touchEngine();
 
+// Optional automatic ends of a dictation (0 = off).
+struct AutoEnd {
+  // After a finished sentence, this long without new speech ends it.
+  std::chrono::milliseconds afterSilence{0};
+  // Nothing said at all for this long ends it.
+  std::chrono::milliseconds noSpeech{0};
+};
+
 // Listens until stopped, cancelled or [maxDuration]; [sink] receives every
 // update. [alive] returning false aborts at once (the listener went away).
-// Returns why it ended: stopped | cancelled | time_limit | gone.
+// Returns why it ended: stopped | cancelled | time_limit | gone | silence |
+// no_speech.
 std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords,
                           const std::vector<std::string>& context,
                           const std::function<void(const std::vector<voice::LiveUpdate>&)>& sink,
                           const std::function<bool()>& alive, const std::function<void()>& onReady,
-                          std::chrono::seconds maxDuration);
+                          std::chrono::seconds maxDuration, AutoEnd autoEnd = {});
 
 // Typing into any focused window with a global key combination (typing_win.cpp).
 // Elsewhere these do nothing and the combination is "".

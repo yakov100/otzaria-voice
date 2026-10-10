@@ -266,9 +266,16 @@ void dictate(Socket s, const Request& req) {
   }
   std::set<std::string> hotwords;
   std::vector<std::string> context;
+  AutoEnd autoEnd;
   if (!req.body.empty()) {
     try {
       auto b = json::parse(req.body);
+      auto millis = [&](const char* key) {
+        if (!b.has(key) || b[key].kind != json::Value::Number) return std::chrono::milliseconds(0);
+        return std::chrono::milliseconds(long(std::clamp(b[key].num(), 0.0, 60000.0)));
+      };
+      autoEnd.afterSilence = millis("endAfterSilenceMs");
+      autoEnd.noSpeech = millis("noSpeechMs");
       if (b["hotwords"].kind == json::Value::Array)
         for (auto& w : b["hotwords"].arr())
           if (w.kind == json::Value::String && hotwords.size() < 2000)
@@ -313,7 +320,7 @@ void dictate(Socket s, const Request& req) {
   try {
     reason = recognizeLive(
         mic, hotwords, context, sendUpdates, [&] { return alive && !clientGone(s); },
-        [&] { line("{\"type\":\"ready\"}"); }, kMaxSession);
+        [&] { line("{\"type\":\"ready\"}"); }, kMaxSession, autoEnd);
     if (reason == "gone") alive = false;
   } catch (const std::exception& ex) {
     platform::log(std::string("dictation error: ") + ex.what());
@@ -452,22 +459,41 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
                           const std::vector<std::string>& context,
                           const std::function<void(const std::vector<voice::LiveUpdate>&)>& sink,
                           const std::function<bool()>& alive, const std::function<void()>& onReady,
-                          std::chrono::seconds maxDuration) {
+                          std::chrono::seconds maxDuration, AutoEnd autoEnd) {
   Engine& e = loadEngine();
   voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context);
   onReady();
   const auto started = std::chrono::steady_clock::now();
+  auto lastUpdate = started;
+  bool heard = false, sentenceDone = false;
+  auto take = [&](const std::vector<voice::LiveUpdate>& ups) {
+    if (!ups.empty()) {
+      lastUpdate = std::chrono::steady_clock::now();
+      heard = true;
+      sentenceDone = ups.back().isFinal;
+    }
+    sink(ups);
+  };
   std::string reason = "stopped";
   while (true) {
     if (cancelRequested) return "cancelled";
     if (stopRequested) break;
-    if (std::chrono::steady_clock::now() - started > maxDuration) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - started > maxDuration) {
       reason = "time_limit";
+      break;
+    }
+    if (autoEnd.afterSilence.count() && sentenceDone && now - lastUpdate > autoEnd.afterSilence) {
+      reason = "silence";
+      break;
+    }
+    if (autoEnd.noSpeech.count() && !heard && now - started > autoEnd.noSpeech) {
+      reason = "no_speech";
       break;
     }
     if (!alive()) return "gone";
     mic.wait(50);
-    mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); });
+    mic.drain([&](const std::vector<float>& pcm) { take(live.add(pcm.data(), pcm.size())); });
   }
   mic.stop();
   mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); }, false);
