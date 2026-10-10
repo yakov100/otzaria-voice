@@ -101,6 +101,9 @@ done
 pkgbuild --root "$payload" --component-plist "$stage/component.plist" --scripts "$scripts" \
   --identifier org.otzaria.voice --version "$version" --install-location / \
   "$stage/component.pkg" >/dev/null
-productbuild --package "$stage/component.pkg" --identifier org.otzaria.voice.installer \
-  --version "$version" "$out/$name.pkg" >/dev/null
+# A distribution file gives the installer window its title.
+productbuild --synthesize --package "$stage/component.pkg" "$stage/distribution.xml" >/dev/null
+perl -0pi -e 's|(<installer-gui-script[^>]*>)|$1\n    <title>שירות הדיבור של אוצריא</title>|' "$stage/distribution.xml"
+productbuild --distribution "$stage/distribution.xml" --package-path "$stage" \
+  --identifier org.otzaria.voice.installer --version "$version" "$out/$name.pkg" >/dev/null
 echo "built $out/$name.pkg"
