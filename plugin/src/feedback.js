@@ -4,7 +4,7 @@
 // strip (one at a time; a new message replaces the previous one) and its
 // confirmation dialog. Messages are plain text, never HTML.
 
-const DOWNLOAD_PAGE = 'https://github.com/Otzaria/otzaria-voice/releases/latest';
+const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {

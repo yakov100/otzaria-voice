@@ -19,8 +19,13 @@ function fieldCall(method, payload) {
 /** Writes the newest text into the field; one call at a time, newest wins. */
 function writeField(fs, text) {
   fs.pending = text;
-  if (fs.writing) return fs.writing;
-  fs.writing = (async () => {
+  if (!fs.writing) fs.writing = drainWrites(fs);
+  return fs.writing;
+}
+
+async function drainWrites(fs) {
+  await null; // let writeField store this promise before the loop can finish
+  try {
     while (fs.pending !== null && fieldSession === fs) {
       const next = fs.pending;
       fs.pending = null;
@@ -36,9 +41,9 @@ function writeField(fs, text) {
         }
       }
     }
+  } finally {
     fs.writing = null;
-  })();
-  return fs.writing;
+  }
 }
 
 async function onFieldActionInvoked(ev) {
