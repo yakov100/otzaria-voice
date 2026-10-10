@@ -4,15 +4,19 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <set>
 #include <unordered_set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace voice {
 
 struct OrtState;
+struct MappedLm;
+using Path = std::filesystem::path;
 
 // log-mel features as in the pack's preprocessor.json (GigaAM).
 class Features {
@@ -37,7 +41,7 @@ struct CtcOutput {
 class CtcModel {
  public:
   // Throws std::runtime_error with a readable message.
-  CtcModel(const std::wstring& onnxRuntimeDll, const std::wstring& modelDir, int threads);
+  CtcModel(const Path& onnxRuntimeLibrary, const Path& modelDir, int threads);
   ~CtcModel();
   CtcModel(const CtcModel&) = delete;
   CtcModel& operator=(const CtcModel&) = delete;
@@ -56,7 +60,7 @@ class CtcModel {
 // library.otzlm (tool/voice_pack/build_lm.py), memory-mapped.
 class NgramLm {
  public:
-  explicit NgramLm(const std::wstring& path);
+  explicit NgramLm(const Path& path);
   ~NgramLm();
   NgramLm(const NgramLm&) = delete;
   NgramLm& operator=(const NgramLm&) = delete;
@@ -70,8 +74,7 @@ class NgramLm {
   std::string_view word(uint32_t i) const;
   static int64_t find(const uint32_t* rows, const uint32_t* cols, uint32_t row, uint32_t key);
 
-  void* file_ = nullptr;
-  void* mapping_ = nullptr;
+  std::unique_ptr<MappedLm> file_;
   const uint8_t* base_ = nullptr;
   uint32_t v_ = 0, nb_ = 0, nt_ = 0;
   float step_ = 0, backoff_ = 0, unk_ = 0;
@@ -93,7 +96,7 @@ std::string normalizeLmWord(const std::string& w);
 class PhraseSet {
  public:
   PhraseSet() = default;
-  PhraseSet(const std::wstring& path, const NgramLm& lm);  // a missing file = empty
+  PhraseSet(const Path& path, const NgramLm& lm);  // a missing file = empty
   bool pair(int a, int b) const;
   bool triple(int a, int b, int c) const;
   size_t size() const { return count_; }

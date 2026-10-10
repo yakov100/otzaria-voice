@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'org.otzaria.voice'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'org.otzaria.voice'
+        minSdk 26          // AAudio for the microphone
+        targetSdk 35
+        versionCode 1
+        versionName '1.1.0'
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+        externalNativeBuild {
+            cmake {
+                // Static C++ runtime: no libc++_shared.so to clash with ONNX Runtime's.
+                arguments '-DANDROID_STL=c++_static'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path '../../CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Microsoft's ONNX Runtime for Android: ships libonnxruntime.so, whose C API
+    // the native service loads at run time (as Otzaria's copy on the desktop).
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">שירות הדיבור של אוצריא</string>
+    <string name="channel_name">שירות הדיבור</string>
+    <string name="notification_ready">מוכן להכתבה באוצריא</string>
+    <string name="notification_no_mic">פתחו את האפליקציה כדי לאפשר מיקרופון</string>
+    <string name="explain">השירות הופך דיבור לטקסט במכשיר עצמו, בלי אינטרנט, עבור התוסף «חיפוש בדיבור» של אוצריא.\n\nאנדרואיד מאפשר להקליט רק לשירות שהופעל מתוך האפליקציה. לכן, אחרי כל הפעלה מחדש של המכשיר, פתחו את האפליקציה הזאת פעם אחת ולחצו על הכפתור.</string>
+    <string name="start">אפשר מיקרופון והפעל את השירות</string>
+    <string name="running">השירות פועל ומוכן להכתבה.</string>
+    <string name="no_permission">בלי הרשאת מיקרופון השירות לא יכול להקשיב.</string>
+</resources>
