@@ -44,7 +44,7 @@ FIELD_ACTION = {
 def manifest_for(name):
     m = json.loads((ROOT / "manifest.base.json").read_text(encoding="utf-8"))
     if name == "next":
-        m["version"] = "2.1.0"
+        m["version"] = "2.1.1"
         m["minAppVersion"] = "0.9.99"
         m["permissions"].append("search.field_actions")
         m["contributes"]["startup"]["searchFieldActions"] = [FIELD_ACTION]

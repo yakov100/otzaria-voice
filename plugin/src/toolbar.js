@@ -3,8 +3,9 @@
 // The microphone button in the reader's toolbar and the keyboard shortcut
 // (default Ctrl+Alt+V; Settings -> Keyboard shortcuts -> plugin shortcuts) both
 // run the same thing: listen, show the words as they are recognized, and open a
-// search tab with the text in the search field, not yet searched, so the user
-// can correct it and press Enter.
+// search tab that searches the text at once. (A tab opened without searching
+// shows an empty page with no visible search field in a narrow window, so the
+// user saw nothing at all.)
 
 const TOOLBAR_ID = 'dictate';
 const TOOLBAR_IDLE = { icon: 'mic_24_regular', title: 'חיפוש בדיבור' };
@@ -45,13 +46,18 @@ async function toggleSearchDictation() {
       say(result.reason === 'no_speech' ? 'לא נשמע דיבור' : 'לא זוהה טקסט');
       return;
     }
-    const res = await Otzaria.call('reader.openSearchTab', { query: result.text, autoSearch: false });
+    let res;
+    try {
+      res = await Otzaria.call('reader.openSearchTab', { query: result.text, autoSearch: true });
+    } catch (e) {
+      res = { success: false, error: { message: String((e && e.message) || e) } };
+    }
     if (!res || !res.success) {
       sayError('פתיחת החיפוש נכשלה: ' + (res && res.error ? res.error.message : ''));
       return;
     }
-    if (result.reason === 'time_limit') say('הדיבור הסתיים אחרי 100 שניות');
-    else say('הטקסט בשדה החיפוש — אפשר לתקן וללחוץ Enter');
+    if (result.reason === 'time_limit') say('הדיבור הסתיים אחרי 100 שניות — מחפש: ' + result.text);
+    else say('מחפש: ' + result.text);
     hotkeyTipOnce(st);
   } finally {
     searchSession = false;
