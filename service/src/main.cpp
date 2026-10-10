@@ -10,6 +10,7 @@
 // installs itself; the installed copy, started at login, serves. Elsewhere no
 // arguments means --serve.
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -63,5 +64,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   return run(args);
 }
 #else
-int main(int argc, char** argv) { return run(std::vector<std::string>(argv, argv + argc)); }
+int main(int argc, char** argv) {
+  const int code = run(std::vector<std::string>(argv, argv + argc));
+  // Leave without running static destructors: ONNX Runtime (loaded with
+  // dlopen) tears its own statics down before ours, so releasing the model
+  // afterwards aborts on macOS ("mutex lock failed"), and service threads may
+  // still hold global mutexes. Nothing here needs those destructors: the log
+  // is closed after every line and the eval output is closed explicitly.
+  std::fflush(nullptr);
+  std::_Exit(code);
+}
 #endif
