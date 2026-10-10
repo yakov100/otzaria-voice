@@ -78,7 +78,8 @@ if [ -n "$pack" ]; then
     <string>/Library/Application Support/OtzariaVoice/pack</string>"
 fi
 # Replace the @PACK_ENV@ line (empty for the without-models variant).
-awk -v env="$pack_env" '{ if ($0 == "@PACK_ENV@") { if (env != "") print env } else print }' \
+# (Passed through the environment: BSD awk rejects newlines in -v values.)
+PACK_ENV="$pack_env" awk '{ if ($0 == "@PACK_ENV@") { if (ENVIRON["PACK_ENV"] != "") print ENVIRON["PACK_ENV"] } else print }' \
   "$here/org.otzaria.voice.plist.in" >"$payload/Library/LaunchAgents/org.otzaria.voice.plist"
 plutil -lint "$payload/Library/LaunchAgents/org.otzaria.voice.plist" "$app/Contents/Info.plist"
 install -m755 "$here/uninstall.sh" "$support/uninstall.sh"
