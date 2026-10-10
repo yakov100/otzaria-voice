@@ -95,7 +95,10 @@ Implemented as:
   Implemented as: a single space is inserted on **each** side only where the
   boundary has no whitespace already (`before␠text␠after`); caret goes after
   `text`. `text` must be a string of ≤1000 characters (`error.invalid_params`
-  otherwise); control characters (newlines etc.) become spaces. The field reacts
+  otherwise); control characters (newlines etc.) become spaces. Text containing
+  `://` is rejected (`error.invalid_params`): Enter in the library and find-ref
+  fields follows `otzaria://` links, which would let a plugin bypass its
+  permissions (e.g. open another plugin). The field reacts
   as to typing (live search in `library` / `inBook` / `findRef`); `fullText`
   only searches on `submit`.
 - `search.setFieldActionState({ sessionId, state, tooltip? })` — `state`:
