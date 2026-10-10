@@ -1,9 +1,5 @@
 #include "engine.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -15,6 +11,7 @@
 
 #include "../third_party/onnxruntime_c_api.h"
 #include "json.h"
+#include "platform.h"
 #include "util.h"
 
 namespace voice {
@@ -86,7 +83,7 @@ std::vector<float> Features::compute(const float* audio, size_t n) const {
 // ---------------------------------------------------------------- ONNX Runtime
 
 struct OrtState {
-  HMODULE dll = nullptr;
+  std::unique_ptr<platform::DynamicLibrary> dll;
   const OrtApi* api = nullptr;
   OrtEnv* env = nullptr;
   OrtSession* session = nullptr;
@@ -105,25 +102,23 @@ struct OrtState {
       if (session) api->ReleaseSession(session);
       if (env) api->ReleaseEnv(env);
     }
-    if (dll) FreeLibrary(dll);
   }
 };
 
-static std::string readFile(const std::wstring& path) {
+static std::string readFile(const Path& path) {
   std::ifstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("missing file: " + util::narrow(path));
+  if (!f) throw std::runtime_error("missing file: " + platform::toUtf8(path));
   std::stringstream ss;
   ss << f.rdbuf();
   return ss.str();
 }
 
-CtcModel::CtcModel(const std::wstring& dllPath, const std::wstring& modelDir, int threads)
+CtcModel::CtcModel(const Path& library, const Path& modelDir, int threads)
     : ort_(std::make_unique<OrtState>()) {
   auto& o = *ort_;
-  o.dll = LoadLibraryExW(dllPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-  if (!o.dll) throw std::runtime_error("cannot load " + util::narrow(dllPath));
+  o.dll = std::make_unique<platform::DynamicLibrary>(library);
   using GetApiBase = const OrtApiBase*(ORT_API_CALL*)();
-  auto getBase = reinterpret_cast<GetApiBase>(GetProcAddress(o.dll, "OrtGetApiBase"));
+  auto getBase = reinterpret_cast<GetApiBase>(o.dll->symbol("OrtGetApiBase"));
   if (!getBase) throw std::runtime_error("OrtGetApiBase missing");
   // The OrtApi table only grows, so an older runtime serves the calls used here.
   for (uint32_t v = ORT_API_VERSION; v >= 11 && !o.api; v--) o.api = getBase()->GetApi(v);
@@ -143,11 +138,11 @@ CtcModel::CtcModel(const std::wstring& dllPath, const std::wstring& modelDir, in
   o.check(api->SetSessionGraphOptimizationLevel(opts, ORT_ENABLE_ALL));
   // Threads sleep instead of spinning between updates: idle CPU stays at zero.
   o.check(api->AddSessionConfigEntry(opts, "session.intra_op.allow_spinning", "0"));
-  const std::wstring model = modelDir + L"\\model.int8.onnx";
+  const Path model = modelDir / "model.int8.onnx";
   o.check(api->CreateSession(o.env, model.c_str(), opts, &o.session));
   o.check(api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &o.memory));
 
-  const auto pre = json::parse(readFile(modelDir + L"\\preprocessor.json"));
+  const auto pre = json::parse(readFile(modelDir / "preprocessor.json"));
   const double fMax = pre.has("f_max") && !pre["f_max"].isNull()
                           ? pre["f_max"].num()
                           : pre["sample_rate"].num() / 2;
@@ -156,7 +151,7 @@ CtcModel::CtcModel(const std::wstring& dllPath, const std::wstring& modelDir, in
                                          pre["f_min"].num(), fMax);
   blank_ = int(pre["blank_id"].num());
   // Keep the parsed document alive: arr() refers into it.
-  const auto vocab = json::parse(readFile(modelDir + L"\\vocab.json"));
+  const auto vocab = json::parse(readFile(modelDir / "vocab.json"));
   for (const auto& c : vocab.arr()) vocab_.push_back(c.str());
   // The blank comes after the characters; its slot makes the list one row wide.
   vocab_.push_back("");
@@ -224,21 +219,16 @@ CtcOutput CtcModel::run(const float* audio, size_t n) {
 
 // ---------------------------------------------------------------- language model
 
-NgramLm::NgramLm(const std::wstring& path) {
-  file_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                      FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file_ == INVALID_HANDLE_VALUE) {
-    file_ = nullptr;
-    throw std::runtime_error("missing file: " + util::narrow(path));
-  }
-  LARGE_INTEGER size{};
-  GetFileSizeEx(file_, &size);
-  mapping_ = CreateFileMappingW(file_, nullptr, PAGE_READONLY, 0, 0, nullptr);
-  if (!mapping_) throw std::runtime_error("cannot map language model");
-  base_ = static_cast<const uint8_t*>(MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, 0));
-  if (!base_) throw std::runtime_error("cannot map language model");
+struct MappedLm : platform::MappedFile {
+  using platform::MappedFile::MappedFile;
+};
+
+NgramLm::NgramLm(const Path& path) {
+  file_ = std::make_unique<MappedLm>(path);
+  base_ = file_->data();
+  const uint64_t fileSize = file_->size();
   static const uint8_t magic[8] = {'O', 'T', 'Z', 'L', 'M', 0, 1, 0};
-  if (size.QuadPart < 40 || std::memcmp(base_, magic, 8) != 0)
+  if (fileSize < 40 || std::memcmp(base_, magic, 8) != 0)
     throw std::runtime_error("not an otzlm file");
   auto u32at = [&](size_t off) {
     uint32_t v;
@@ -285,14 +275,10 @@ NgramLm::NgramLm(const std::wstring& path) {
   o += size_t(nt_) * 4;
   triQ_ = base_ + o;
   o += nt_;
-  if (o > size_t(size.QuadPart)) throw std::runtime_error("truncated language model");
+  if (o > fileSize) throw std::runtime_error("truncated language model");
 }
 
-NgramLm::~NgramLm() {
-  if (base_) UnmapViewOfFile(base_);
-  if (mapping_) CloseHandle(mapping_);
-  if (file_) CloseHandle(file_);
-}
+NgramLm::~NgramLm() = default;
 
 std::string_view NgramLm::word(uint32_t i) const {
   return std::string_view(wRaw_ + wOff_[i], wOff_[i + 1] - wOff_[i]);
@@ -398,7 +384,7 @@ static inline double logAddExp(double a, double b) {
   return m + std::log(std::exp(a - m) + std::exp(b - m));
 }
 
-PhraseSet::PhraseSet(const std::wstring& path, const NgramLm& lm) {
+PhraseSet::PhraseSet(const Path& path, const NgramLm& lm) {
   std::ifstream f(path, std::ios::binary);
   std::string line;
   auto key2 = [](int a, int b) { return (uint64_t(uint32_t(a)) << 32) | uint32_t(b); };

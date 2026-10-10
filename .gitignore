@@ -1,3 +1,7 @@
 service/out/
 out/
-
+build/
+service/android/.gradle/
+service/android/app/build/
+service/android/app/.cxx/
+service/android/local.properties
