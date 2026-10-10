@@ -340,7 +340,17 @@ int run(const std::vector<std::string>& args) {
   for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
   argv.push_back(nullptr);
   pid_t pid;
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+  // posix_spawn exists on Android only from API 28 (minSdk is 26).
+  pid = fork();
+  if (pid < 0) return -1;
+  if (pid == 0) {
+    execvp(argv[0], argv.data());
+    _exit(127);
+  }
+#else
   if (posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), environ) != 0) return -1;
+#endif
   int status = 0;
   while (waitpid(pid, &status, 0) < 0) {
     if (errno != EINTR) return -1;

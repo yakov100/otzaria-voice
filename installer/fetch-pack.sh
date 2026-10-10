@@ -22,8 +22,8 @@ out="$2"
 zip="$cache/otzaria-voice-he-v3.zip"
 
 sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
-  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum <"$1" | cut -d' ' -f1
+  else shasum -a 256 <"$1" | cut -d' ' -f1; fi
 }
 
 size() { wc -c <"$1" | tr -d ' '; }
