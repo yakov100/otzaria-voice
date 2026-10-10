@@ -23,7 +23,16 @@ struct Release {
 // The pack this service version installs (tool/voice_pack/make_pack.py).
 extern const Release kRelease;
 
-Path dir();                  // installed pack
+// The pack in use: the first complete one of OTZARIA_VOICE_PACK_DIR, the
+// user's copy, Otzaria's data folder (Linux, macOS) and a copy installed for
+// everyone (/usr/share/otzaria-voice/pack; Otzaria Voice.app/Contents/Resources
+// /pack), which may be read-only. installTarget() otherwise.
+Path dir();
+// Where a download goes: OTZARIA_VOICE_PACK_DIR when writable, else userDir().
+Path installTarget();
+// Windows %APPDATA%\otzaria\stt\pack; Linux ~/.local/share/otzaria-voice/pack;
+// macOS ~/Library/Application Support/OtzariaVoice/pack; Android <files>/stt/pack.
+Path userDir();
 bool ready();                // every required file present
 int installedVersion();      // 0 when none
 

@@ -261,6 +261,9 @@ Path findOnnxRuntime() {
   const Path here = exeDir();
   std::vector<Path> candidates = {
       here / name,
+#if !defined(__APPLE__)
+      here / "libonnxruntime.so.1",  // packages may ship only the versioned name
+#endif
       here / "lib" / name,
       here / "onnxruntime" / name,
       here.parent_path() / "lib" / "otzaria-voice" / name,
@@ -268,11 +271,13 @@ Path findOnnxRuntime() {
 #if defined(__APPLE__)
   // Otzaria.app embeds it in Contents/Frameworks.
   candidates.push_back(here.parent_path() / "Frameworks" / name);
+  candidates.push_back(Path("/Applications/Otzaria Voice.app/Contents/Frameworks") / name);
   candidates.push_back(Path("/Applications/Otzaria.app/Contents/Frameworks") / name);
   candidates.push_back(Path("/Applications/otzaria.app/Contents/Frameworks") / name);
   candidates.push_back(home() / "Applications" / "Otzaria.app" / "Contents" / "Frameworks" / name);
 #else
   // Otzaria's Linux bundle keeps it in <bundle>/onnxruntime/.
+  candidates.push_back(Path("/usr/lib/otzaria-voice") / name);
   for (const char* d : {"/opt/otzaria", "/usr/lib/otzaria", "/usr/share/otzaria",
                         "/usr/local/lib/otzaria", "/app/otzaria"})
     candidates.push_back(Path(d) / "onnxruntime" / name);

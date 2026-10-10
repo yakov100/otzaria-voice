@@ -10,12 +10,13 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace pack {
 
 const Release kRelease = {
     3,
-    "https://github.com/Otzaria/otzaria-voice/releases/download/voice-he-v3/otzaria-voice-he-v3.zip",
+    "https://github.com/yakov100/otzaria-voice/releases/download/voice-pack-v3/otzaria-voice-he-v3.zip",
     334167487,
     "bde4cfd19a2a581f7836267ddd7ece700bf93c51e122306d6a567958f4c7eb1e",
 };
@@ -51,7 +52,8 @@ void run(std::function<void()> release) {
   const Release& r = kRelease;
   auto override = platform::env("OTZARIA_VOICE_PACK_URL");
   const std::string url = override.empty() ? r.url : override;
-  const Path base = dir().parent_path();
+  const Path target = installTarget();
+  const Path base = target.parent_path();
   const Path work = base / "download";
   const Path part = work / ("voice-pack-v" + std::to_string(r.version) + ".zip.part");
   const Path staging = base / "pack.new";
@@ -79,7 +81,7 @@ void run(std::function<void()> release) {
       v << r.version;
     }
     release();  // the old pack's files may be open
-    const Path target = dir(), old = base / "pack.old";
+    const Path old = base / "pack.old";
     fs::remove_all(old, ec);
     if (fs::exists(target)) fs::rename(target, old);
     fs::rename(staging, target);
@@ -97,20 +99,73 @@ void run(std::function<void()> release) {
   running = false;
 }
 
-}  // namespace
-
-Path dir() {
-  auto e = platform::env("OTZARIA_VOICE_PACK_DIR");
-  return e.empty() ? platform::otzariaDataRoot() / "stt" / "pack" : platform::fromUtf8(e);
-}
-
-bool ready() {
-  const auto d = dir();
+bool complete(const Path& d) {
   std::error_code ec;
   for (int i = 0; i < kRequiredCount; i++)
     if (!fs::exists(d / required(i), ec)) return false;
   return true;
 }
+
+// Where a pack may already be, in order of preference: the user's own copy,
+// then copies installed for everyone (read-only).
+std::vector<Path> candidates() {
+  std::vector<Path> out;
+  auto e = platform::env("OTZARIA_VOICE_PACK_DIR");
+  if (!e.empty()) out.push_back(platform::fromUtf8(e));
+  out.push_back(userDir());
+#ifndef _WIN32
+  // Shared with Otzaria's own data folder, as on Windows.
+  out.push_back(platform::otzariaDataRoot() / "stt" / "pack");
+#endif
+#if defined(__APPLE__)
+  out.push_back(platform::exeDir().parent_path() / "Resources" / "pack");
+  out.push_back(Path("/Applications/Otzaria Voice.app/Contents/Resources/pack"));
+#elif defined(__linux__) && !defined(__ANDROID__)
+  out.push_back(Path("/usr/share/otzaria-voice/pack"));
+#endif
+  return out;
+}
+
+bool writable(const Path& d) {
+  std::error_code ec;
+  fs::create_directories(d.parent_path(), ec);
+  const Path probe = d.parent_path() / ".otzaria-voice-write-test";
+  {
+    std::ofstream f(probe, std::ios::binary);
+    if (!f) return false;
+  }
+  fs::remove(probe, ec);
+  return true;
+}
+
+}  // namespace
+
+Path userDir() {
+#if defined(_WIN32) || defined(__ANDROID__)
+  return platform::otzariaDataRoot() / "stt" / "pack";
+#elif defined(__APPLE__)
+  auto h = platform::env("HOME");
+  return Path(h) / "Library" / "Application Support" / "OtzariaVoice" / "pack";
+#else
+  auto x = platform::env("XDG_DATA_HOME");
+  return (x.empty() ? Path(platform::env("HOME")) / ".local" / "share" : Path(x)) / "otzaria-voice" /
+         "pack";
+#endif
+}
+
+Path dir() {
+  for (const auto& d : candidates())
+    if (complete(d)) return d;
+  return installTarget();
+}
+
+Path installTarget() {
+  auto e = platform::env("OTZARIA_VOICE_PACK_DIR");
+  if (!e.empty() && writable(platform::fromUtf8(e))) return platform::fromUtf8(e);
+  return userDir();
+}
+
+bool ready() { return complete(dir()); }
 
 int installedVersion() {
   std::ifstream f(dir() / "version.txt", std::ios::binary);

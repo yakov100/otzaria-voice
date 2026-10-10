@@ -79,13 +79,22 @@ void launchDetached(const Path& exe) {
 
 Path installedExe() { return installDir() / "otzaria-voice"; }
 
+// Installed by a system package (/usr, /opt) or an app bundle: runs from
+// where it is, next to its own ONNX Runtime; only the login start is per user.
+bool installedForEveryone(const Path& exe) {
+  const std::string p = exe.string();
+  return p.rfind("/usr/", 0) == 0 || p.rfind("/opt/", 0) == 0 ||
+         p.find(".app/Contents/MacOS/") != std::string::npos;
+}
+
 int install(bool quiet) {
-  const Path target = installedExe();
   const Path self = platform::exePath();
+  const bool inPlace = installedForEveryone(self);
+  const Path target = inPlace ? self : installedExe();
   service::postQuit();  // a running copy is replaced
   std::error_code ec;
-  fs::create_directories(installDir(), ec);
-  if (!fs::equivalent(self, target, ec)) {
+  if (!inPlace) fs::create_directories(installDir(), ec);
+  if (!inPlace && !fs::equivalent(self, target, ec)) {
     fs::copy_file(self, target, fs::copy_options::overwrite_existing, ec);
     if (ec) {
       std::cerr << "install failed: cannot copy to " << target << ": " << ec.message() << std::endl;
@@ -104,7 +113,8 @@ int install(bool quiet) {
         fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing, e2);
     }
   }
-  fs::permissions(target, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+  if (!inPlace)
+    fs::permissions(target, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
                               fs::perms::others_read | fs::perms::others_exec,
                   ec);
 #ifdef __APPLE__
