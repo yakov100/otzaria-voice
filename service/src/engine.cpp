@@ -7,7 +7,9 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../third_party/onnxruntime_c_api.h"
 #include "json.h"
@@ -772,21 +774,28 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
   for (size_t k = 0; k < probs.size(); k++) probs[k] = std::exp(double(out.logProbs[k]));
   // The same candidate comes back from several spans and every round.
   std::unordered_map<std::string, double> memo;
-  auto total = [&](const std::vector<std::string>& w, const std::vector<std::string>& s) {
-    const std::string key = join(s, 0, s.size()) + '\x01' + join(w, 0, w.size());
-    auto it = memo.find(key);
-    if (it != memo.end()) return it->second;
-    const double score = ctcLogProb(probs, out.frames, v, labels(s)) + lmScore(w);
-    memo.emplace(key, score);
-    return score;
+  auto keyOf = [](const std::vector<std::string>& w, const std::vector<std::string>& s) {
+    return join(s, 0, s.size()) + '\x01' + join(w, 0, w.size());
   };
+  auto score = [&](const std::vector<std::string>& w, const std::vector<std::string>& s) {
+    return ctcLogProb(probs, out.frames, v, labels(s)) + lmScore(w);
+  };
+  struct Cand {
+    std::vector<std::string> w, s;
+    std::string key;
+  };
+  const unsigned threads = std::max(1u, std::min(6u, std::thread::hardware_concurrency()));
 
   // Each word is written one way and scored against the audio another; only the
   // words of a swapped-in phrase differ.
   std::vector<std::string> sounded = written;
   for (int round = 0; round < kMaxRounds; round++) {
-    double best = total(written, sounded);
-    std::vector<std::string> bestW, bestS;
+    const std::string curKey = keyOf(written, sounded);
+    if (!memo.count(curKey)) memo.emplace(curKey, score(written, sounded));
+    double best = memo[curKey];
+    // Collect this round's candidates in order, score the new ones on several
+    // threads, then take the first best in order: the same pick as one by one.
+    std::vector<Cand> cands;
     for (size_t i = 0; i < written.size(); i++) {
       for (size_t j = i + 1; j <= std::min(written.size(), i + kMaxSpan); j++) {
         const std::string span = join(written, i, j);
@@ -805,19 +814,43 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
             std::vector<std::string> cs(sounded.begin(), sounded.begin() + i);
             cs.insert(cs.end(), sp.words.begin(), sp.words.end());
             cs.insert(cs.end(), sounded.begin() + j, sounded.end());
-            const double s = total(cw, cs);
-            if (s > best) {
-              best = s;
-              bestW = std::move(cw);
-              bestS = std::move(cs);
-            }
+            std::string key = keyOf(cw, cs);
+            cands.push_back({std::move(cw), std::move(cs), std::move(key)});
           }
         }
       }
     }
-    if (bestW.empty()) break;
-    written = std::move(bestW);
-    sounded = std::move(bestS);
+    std::vector<size_t> todo;
+    {
+      std::unordered_set<std::string> queued;
+      for (size_t k = 0; k < cands.size(); k++)
+        if (!memo.count(cands[k].key) && queued.insert(cands[k].key).second) todo.push_back(k);
+    }
+    std::vector<double> scores(todo.size());
+    if (todo.size() < 8 || threads == 1) {
+      for (size_t n = 0; n < todo.size(); n++) scores[n] = score(cands[todo[n]].w, cands[todo[n]].s);
+    } else {
+      std::vector<std::thread> pool;
+      for (unsigned t = 1; t < threads; t++) pool.emplace_back([&, t] {
+        for (size_t n = t; n < todo.size(); n += threads)
+          scores[n] = score(cands[todo[n]].w, cands[todo[n]].s);
+      });
+      for (size_t n = 0; n < todo.size(); n += threads)
+        scores[n] = score(cands[todo[n]].w, cands[todo[n]].s);
+      for (auto& th : pool) th.join();
+    }
+    for (size_t n = 0; n < todo.size(); n++) memo.emplace(cands[todo[n]].key, scores[n]);
+    const Cand* pick = nullptr;
+    for (const auto& c : cands) {
+      const double s = memo[c.key];
+      if (s > best) {
+        best = s;
+        pick = &c;
+      }
+    }
+    if (!pick) break;
+    written = pick->w;
+    sounded = pick->s;
   }
   return written;
 }
