@@ -862,7 +862,18 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
 
     // 2. Inside a word the LM does not know, glued by the beam ("הבוייסאמקרו"):
     // part of it becomes a phrase, the rest stays as words ("ה" + איבעית אימא +
-    // "קרו"); a leftover of one or two letters may also be dropped.
+    // "קרו"); a leftover of one or two letters may also be dropped. A leftover
+    // may also take its word-sounds spelling in the same step: "קרו" alone
+    // after the phrase scores worse than the glued word, "קרא" better.
+    // (written, sounded) choices for a leftover; {"", ""} = none.
+    auto leftovers = [&](const std::string& piece, bool keep) {
+      std::vector<std::pair<std::string, std::string>> out;
+      if (piece.empty() || !keep) return decltype(out){{"", ""}};
+      out.push_back({piece, piece});
+      if (auto it = wordSounds_.find(normalizeLmWord(piece)); it != wordSounds_.end())
+        for (const auto& x : it->second) out.push_back({x, piece});
+      return out;
+    };
     for (size_t k = 0; k < written.size(); k++) {
       const std::string& w = written[k];
       if (w != sounded[k]) continue;
@@ -888,15 +899,19 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
             if (!close(ss, sp.skeleton)) continue;
             for (int keepPre = 1; keepPre >= (preLen > 0 && preLen <= 2 ? 0 : 1); keepPre--) {
               for (int keepPost = 1; keepPost >= (postLen > 0 && postLen <= 2 ? 0 : 1); keepPost--) {
-                std::vector<std::string> cw(written.begin(), written.begin() + k);
-                std::vector<std::string> cs(sounded.begin(), sounded.begin() + k);
-                if (preLen && keepPre) cw.push_back(pre), cs.push_back(pre);
-                cw.insert(cw.end(), ph.words.begin(), ph.words.end());
-                cs.insert(cs.end(), sp.words.begin(), sp.words.end());
-                if (postLen && keepPost) cw.push_back(post), cs.push_back(post);
-                cw.insert(cw.end(), written.begin() + k + 1, written.end());
-                cs.insert(cs.end(), sounded.begin() + k + 1, sounded.end());
-                add(std::move(cw), std::move(cs));
+                for (const auto& left : leftovers(pre, preLen && keepPre)) {
+                  for (const auto& right : leftovers(post, postLen && keepPost)) {
+                    std::vector<std::string> cw(written.begin(), written.begin() + k);
+                    std::vector<std::string> cs(sounded.begin(), sounded.begin() + k);
+                    if (!left.first.empty()) cw.push_back(left.first), cs.push_back(left.second);
+                    cw.insert(cw.end(), ph.words.begin(), ph.words.end());
+                    cs.insert(cs.end(), sp.words.begin(), sp.words.end());
+                    if (!right.first.empty()) cw.push_back(right.first), cs.push_back(right.second);
+                    cw.insert(cw.end(), written.begin() + k + 1, written.end());
+                    cs.insert(cs.end(), sounded.begin() + k + 1, sounded.end());
+                    add(std::move(cw), std::move(cs));
+                  }
+                }
               }
             }
           }
@@ -1072,12 +1087,19 @@ void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
   if (speechSec_ >= kMinSpeechSec) {
     CtcOutput r;
     const auto finalWords = recognize(16, &r);
-    // The final decode completes what follows the committed words; the second
-    // pass sees the whole segment and may revise them too.
-    std::vector<std::string> words = committed_;
-    if (finalWords.size() > committed_.size())
-      words.insert(words.end(), finalWords.begin() + committed_.size(), finalWords.end());
-    if (rescorer_ && r.frames) words = rescorer_->rescore(r, std::move(words));
+    // With a second pass, it gets the final decode of the whole segment (the
+    // final update may revise committed words). Without one, the final decode
+    // only completes what follows the committed words. Joining like that loses
+    // words when the final decode glues differently: "אי" committed + a final
+    // decode of one word = "אי" alone.
+    std::vector<std::string> words;
+    if (rescorer_ && r.frames) {
+      words = rescorer_->rescore(r, finalWords);
+    } else {
+      words = committed_;
+      if (finalWords.size() > committed_.size())
+        words.insert(words.end(), finalWords.begin() + committed_.size(), finalWords.end());
+    }
     out.push_back({segmentId_, display(words, false), true});
     for (const auto& w : words) context_.push_back(normalizeLmWord(w));
     if (context_.size() > 2) context_.erase(context_.begin(), context_.end() - 2);
