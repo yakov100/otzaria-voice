@@ -426,6 +426,7 @@ CtcDecoder::CtcDecoder(const std::vector<std::string>& vocab, int blank, const N
     : vocab_(vocab), blank_(blank), space_(-1), lm_(lm), phrases_(phrases), w_(weights) {
   for (size_t i = 0; i < vocab_.size(); i++) {
     vocabNorm_.push_back(normChar(vocab_[i]));
+    latin_.push_back(vocab_[i].size() == 1 && vocab_[i][0] >= 'a' && vocab_[i][0] <= 'z');
     if (vocab_[i] == " ") space_ = int(i);
   }
 }
@@ -495,7 +496,7 @@ std::string CtcDecoder::decode(const CtcOutput& out, int beamWidth,
       const double pAll = logAddExp(b.pb, b.pnb);
       for (int c = 0; c < v; c++) {
         const double p = row[c];
-        if (p <= w_.prune) continue;
+        if (p <= w_.prune || (size_t(c) < latin_.size() && latin_[c])) continue;
         if (c == blank_) {
           Beam& e = at(b.text, b);
           e.pb = logAddExp(e.pb, pAll + p);

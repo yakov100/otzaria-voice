@@ -128,6 +128,9 @@ class CtcDecoder {
  private:
   std::vector<std::string> vocab_;
   std::vector<std::string> vocabNorm_;
+  // Latin letters are never written: the model sometimes hears a Hebrew vowel
+  // as "a" or "v", which glues junk into a word.
+  std::vector<char> latin_;
   int blank_, space_;
   const NgramLm& lm_;
   const PhraseSet* phrases_;
