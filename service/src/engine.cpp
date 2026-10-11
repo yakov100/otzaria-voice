@@ -216,7 +216,34 @@ CtcOutput CtcModel::run(const float* audio, size_t n) {
     const double lse = mx + std::log(sum);
     for (int c = 0; c < r.vocab; c++) row[c] = float(row[c] - lse);
   }
+  foldLatin(r);
   return r;
+}
+
+// The model sometimes hears a Hebrew vowel as a Latin letter ("a" for the "אי"
+// of "איבעית"). Latin letters are never written, so their probability joins the
+// Hebrew letter that sounds like them (Dart OnnxCtcModel.foldLatin).
+void CtcModel::foldLatin(CtcOutput& r) const {
+  static const std::pair<const char*, const char*> kMap[] = {
+      {"a", "\xD7\x90"}, {"e", "\xD7\x90"}, {"i", "\xD7\x99"}, {"o", "\xD7\x95"}, {"u", "\xD7\x95"}};
+  std::vector<std::pair<int, int>> pairs;
+  auto find = [&](const char* ch) {
+    for (size_t i = 0; i < vocab_.size() && int(i) < r.vocab; i++)
+      if (vocab_[i] == ch) return int(i);
+    return -1;
+  };
+  for (const auto& [from, to] : kMap) {
+    const int f = find(from), t = find(to);
+    if (f >= 0 && t >= 0) pairs.emplace_back(f, t);
+  }
+  for (int t = 0; t < r.frames; t++) {
+    float* row = &r.logProbs[size_t(t) * r.vocab];
+    for (const auto& [f, to] : pairs) {
+      const double a = row[to], b = row[f], m = std::max(a, b);
+      row[to] = float(m + std::log(std::exp(a - m) + std::exp(b - m)));
+      row[f] = -std::numeric_limits<float>::infinity();
+    }
+  }
 }
 
 // ---------------------------------------------------------------- language model

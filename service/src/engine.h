@@ -54,6 +54,7 @@ class CtcModel {
  private:
   std::unique_ptr<OrtState> ort_;
   std::unique_ptr<Features> features_;
+  void foldLatin(CtcOutput& r) const;
   std::vector<std::string> vocab_;
   int blank_ = 0;
 };
