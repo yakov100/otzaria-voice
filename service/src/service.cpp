@@ -236,7 +236,8 @@ Engine& loadEngine() {
   if (platform::env("OTZARIA_VOICE_NO_RESCORE").empty())
     e->rescorer = std::make_unique<voice::PhraseRescorer>(
         e->model->vocab(), e->model->blank(), *e->lm, voice::talmudPhrases(),
-        voice::PhraseRescorer::loadSounds(packDir / "phrases" / "talmud_sounds.tsv"));
+        voice::PhraseRescorer::loadSounds(packDir / "phrases" / "talmud_sounds.tsv"),
+        voice::PhraseRescorer::loadWordSounds(packDir / "phrases" / "word_sounds.tsv"));
   engine = std::move(e);
   platform::log("engine loaded in " +
                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -244,7 +245,9 @@ Engine& loadEngine() {
                                    .count()) +
                 " ms, ort " + platform::toUtf8(ort) + ", phrases " +
                 std::to_string(engine->phrases->size()) + ", sounded phrases " +
-                std::to_string(engine->rescorer ? engine->rescorer->sounded() : 0));
+                std::to_string(engine->rescorer ? engine->rescorer->sounded() : 0) +
+                ", word sounds " +
+                std::to_string(engine->rescorer ? engine->rescorer->wordSounds() : 0));
   return *engine;
 }
 

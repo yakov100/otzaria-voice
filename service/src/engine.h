@@ -146,14 +146,19 @@ class CtcDecoder {
 class PhraseRescorer {
  public:
   using Sounds = std::map<std::string, std::vector<std::string>>;
+  // [wordSounds]: frequent words by how they sound (loadWordSounds): a word the
+  // beam wrote exactly as such a sound ("קרו") may take the word's spelling (קרא).
   PhraseRescorer(const std::vector<std::string>& vocab, int blank, const NgramLm& lm,
                  const std::vector<std::string>& phrases, const Sounds& sounds = {},
-                 LmWeights weights = {});
+                 Sounds wordSounds = {}, LmWeights weights = {});
   std::vector<std::string> rescore(const CtcOutput& out, std::vector<std::string> words) const;
   // phrases/talmud_sounds.tsv of the pack: phrase TAB sound [TAB sound]; # = comment.
   // A missing file is empty.
   static Sounds loadSounds(const Path& path);
+  // phrases/word_sounds.tsv: sound TAB word [TAB word], keys normalized.
+  static Sounds loadWordSounds(const Path& path);
   size_t sounded() const { return sounded_; }
+  size_t wordSounds() const { return wordSounds_.size(); }
 
  private:
   struct Spelling {
@@ -175,6 +180,11 @@ class PhraseRescorer {
   const NgramLm& lm_;
   LmWeights w_;
   std::vector<Phrase> phrases_;
+  // All spellings in list order, (phrase, spelling), and their ids by skeleton length.
+  std::vector<std::pair<size_t, size_t>> flat_;
+  std::map<size_t, std::vector<size_t>> byLength_;
+  std::vector<size_t> closeTo(size_t skeletonLength) const;
+  Sounds wordSounds_;
   size_t sounded_ = 0;
 };
 

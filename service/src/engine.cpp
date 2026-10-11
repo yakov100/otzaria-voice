@@ -671,8 +671,8 @@ constexpr double kLoose = 0.5;
 
 PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
                                const NgramLm& lm, const std::vector<std::string>& phrases,
-                               const Sounds& sounds, LmWeights weights)
-    : blank_(blank), lm_(lm), w_(weights) {
+                               const Sounds& sounds, Sounds wordSounds, LmWeights weights)
+    : blank_(blank), lm_(lm), w_(weights), wordSounds_(std::move(wordSounds)) {
   for (size_t i = 0; i < vocab.size(); i++) index_.emplace(vocab[i], int(i));
   for (const auto& p : phrases) {
     Phrase ph{words(p), normalizeLmWord(p), {}};
@@ -688,6 +688,27 @@ PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
     if (ph.spellings.size() > 1) sounded_++;
     phrases_.push_back(std::move(ph));
   }
+  for (size_t pi = 0; pi < phrases_.size(); pi++)
+    for (size_t si = 0; si < phrases_[pi].spellings.size(); si++) {
+      byLength_[phrases_[pi].spellings[si].skeleton.size()].push_back(flat_.size());
+      flat_.push_back({pi, si});
+    }
+}
+
+// Spellings whose skeleton length is within 3 of [n], in list order.
+std::vector<size_t> PhraseRescorer::closeTo(size_t n) const {
+  std::vector<size_t> ids;
+  for (size_t len = n > 3 ? n - 3 : 0; len <= n + 3; len++)
+    if (auto it = byLength_.find(len); it != byLength_.end())
+      ids.insert(ids.end(), it->second.begin(), it->second.end());
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+PhraseRescorer::Sounds PhraseRescorer::loadWordSounds(const Path& path) {
+  Sounds out;
+  for (auto& [k, v] : loadSounds(path)) out[normalizeLmWord(k)] = std::move(v);
+  return out;
 }
 
 PhraseRescorer::Sounds PhraseRescorer::loadSounds(const Path& path) {
@@ -796,18 +817,83 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
     // Collect this round's candidates in order, score the new ones on several
     // threads, then take the first best in order: the same pick as one by one.
     std::vector<Cand> cands;
+    auto add = [&](std::vector<std::string> cw, std::vector<std::string> cs) {
+      std::string key = keyOf(cw, cs);
+      cands.push_back({std::move(cw), std::move(cs), std::move(key)});
+    };
+    auto close = [&](const std::u32string& ss, const std::u32string& sp) {
+      return double(editDistance(ss, sp)) <= kLoose * double(sp.size());
+    };
+
+    // 1. A word written exactly as a frequent word sounds ("קרו" = קְרָא): the
+    // audio stays, only the LM judges the spelling.
+    for (size_t k = 0; k < written.size(); k++) {
+      if (written[k] != sounded[k]) continue;
+      auto it = wordSounds_.find(normalizeLmWord(written[k]));
+      if (it == wordSounds_.end()) continue;
+      for (const auto& x : it->second) {
+        auto cw = written;
+        cw[k] = x;
+        add(std::move(cw), sounded);
+      }
+    }
+
+    // 2. Inside a word the LM does not know, glued by the beam ("הבוייסאמקרו"):
+    // part of it becomes a phrase, the rest stays as words ("ה" + איבעית אימא +
+    // "קרו"); a leftover of one or two letters may also be dropped.
+    for (size_t k = 0; k < written.size(); k++) {
+      const std::string& w = written[k];
+      if (w != sounded[k]) continue;
+      const auto chars = util::utf8Chars(w);
+      std::string stripped;
+      for (char c : w)
+        if (c != '"' && c != '\'') stripped += c;
+      if (chars.size() < 4 || lm_.idOf(normalizeLmWord(stripped)) >= 0) continue;
+      auto piece = [&](size_t a, size_t b) {
+        std::string s;
+        for (size_t c = a; c < b; c++) s += chars[c];
+        return s;
+      };
+      for (size_t a = 0; a < chars.size(); a++) {
+        for (size_t b = a + 1; b <= chars.size(); b++) {
+          if (a == 0 && b == chars.size()) continue;
+          const std::u32string ss = skeletonOf(piece(a, b));
+          const std::string pre = piece(0, a), post = piece(b, chars.size());
+          const size_t preLen = a, postLen = chars.size() - b;
+          for (size_t id : closeTo(ss.size())) {
+            const auto& ph = phrases_[flat_[id].first];
+            const auto& sp = ph.spellings[flat_[id].second];
+            if (!close(ss, sp.skeleton)) continue;
+            for (int keepPre = 1; keepPre >= (preLen > 0 && preLen <= 2 ? 0 : 1); keepPre--) {
+              for (int keepPost = 1; keepPost >= (postLen > 0 && postLen <= 2 ? 0 : 1); keepPost--) {
+                std::vector<std::string> cw(written.begin(), written.begin() + k);
+                std::vector<std::string> cs(sounded.begin(), sounded.begin() + k);
+                if (preLen && keepPre) cw.push_back(pre), cs.push_back(pre);
+                cw.insert(cw.end(), ph.words.begin(), ph.words.end());
+                cs.insert(cs.end(), sp.words.begin(), sp.words.end());
+                if (postLen && keepPost) cw.push_back(post), cs.push_back(post);
+                cw.insert(cw.end(), written.begin() + k + 1, written.end());
+                cs.insert(cs.end(), sounded.begin() + k + 1, sounded.end());
+                add(std::move(cw), std::move(cs));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Spans of whole words.
     for (size_t i = 0; i < written.size(); i++) {
       for (size_t j = i + 1; j <= std::min(written.size(), i + kMaxSpan); j++) {
         const std::string span = join(written, i, j);
         const std::u32string ss = skeletonOf(span);
         const std::string spanNorm = normalizeLmWord(span);
-        for (const auto& ph : phrases_) {
+        for (size_t id : closeTo(ss.size())) {
+          const auto& ph = phrases_[flat_[id].first];
           if (spanNorm == ph.norm) continue;
-          for (const auto& sp : ph.spellings) {
-            const double diff = double(ss.size()) - double(sp.skeleton.size());
-            if (std::abs(diff) > 3 ||
-                double(editDistance(ss, sp.skeleton)) > kLoose * double(sp.skeleton.size()))
-              continue;
+          {
+            const auto& sp = ph.spellings[flat_[id].second];
+            if (!close(ss, sp.skeleton)) continue;
             std::vector<std::string> cw(written.begin(), written.begin() + i);
             cw.insert(cw.end(), ph.words.begin(), ph.words.end());
             cw.insert(cw.end(), written.begin() + j, written.end());
