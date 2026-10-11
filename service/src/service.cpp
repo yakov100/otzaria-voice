@@ -236,8 +236,12 @@ Engine& loadEngine() {
   if (platform::env("OTZARIA_VOICE_NO_RESCORE").empty())
     e->rescorer = std::make_unique<voice::PhraseRescorer>(
         e->model->vocab(), e->model->blank(), *e->lm, voice::talmudPhrases(),
-        voice::PhraseRescorer::loadSounds(packDir / "phrases" / "talmud_sounds.tsv"),
-        voice::PhraseRescorer::loadWordSounds(packDir / "phrases" / "word_sounds.tsv"));
+        // The pack's files, then the speaker's own list next to the pack
+        // (learn_personal_sounds.py in Otzaria; never in the pack).
+        voice::PhraseRescorer::loadSounds({packDir / "phrases" / "talmud_sounds.tsv",
+                                           packDir.parent_path() / "personal_sounds.tsv"}),
+        voice::PhraseRescorer::loadWordSounds({packDir / "phrases" / "word_sounds.tsv",
+                                               packDir.parent_path() / "personal_words.tsv"}));
   engine = std::move(e);
   platform::log("engine loaded in " +
                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -678,13 +678,22 @@ PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
   for (const auto& p : phrases) {
     Phrase ph{words(p), normalizeLmWord(p), {}};
     if (ph.words.size() < 2 || skeletonOf(p).empty()) continue;
-    std::vector<std::string> spellings{p};
-    if (auto it = sounds.find(p); it != sounds.end())
-      spellings.insert(spellings.end(), it->second.begin(), it->second.end());
-    for (const auto& s : spellings) {
-      auto sw = words(s);
-      if (sw.size() == ph.words.size() && !skeletonOf(s).empty())
+    ph.spellings.push_back({ph.words, skeletonOf(p)});
+    if (auto it = sounds.find(p); it != sounds.end()) {
+      for (const auto& s : it->second) {
+        if (s == p || skeletonOf(s).empty()) continue;
+        // A sound with fewer words leaves the last ones empty ("בוייסאמ" for
+        // איבעית אימא); one with more joins its tail into the last.
+        auto sw = words(s);
+        if (sw.size() < ph.words.size()) {
+          sw.resize(ph.words.size());
+        } else if (sw.size() > ph.words.size()) {
+          std::string tail = join(sw, ph.words.size() - 1, sw.size());
+          sw.resize(ph.words.size());
+          sw.back() = tail;
+        }
         ph.spellings.push_back({std::move(sw), skeletonOf(s)});
+      }
     }
     if (ph.spellings.size() > 1) sounded_++;
     phrases_.push_back(std::move(ph));
@@ -706,28 +715,40 @@ std::vector<size_t> PhraseRescorer::closeTo(size_t n) const {
   return ids;
 }
 
-PhraseRescorer::Sounds PhraseRescorer::loadWordSounds(const Path& path) {
+PhraseRescorer::Sounds PhraseRescorer::loadWordSounds(const std::vector<Path>& paths) {
   Sounds out;
-  for (auto& [k, v] : loadSounds(path)) out[normalizeLmWord(k)] = std::move(v);
-  return out;
-}
-
-PhraseRescorer::Sounds PhraseRescorer::loadSounds(const Path& path) {
-  Sounds out;
-  std::ifstream f(path, std::ios::binary);
-  std::string line;
-  while (std::getline(f, line)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (util::trim(line).empty() || line[0] == '#') continue;
-    auto parts = util::split(line, '\t');
-    auto& list = out[util::trim(parts[0])];
-    for (size_t i = 1; i < parts.size(); i++)
-      if (!util::trim(parts[i]).empty()) list.push_back(util::trim(parts[i]));
+  for (auto& [k, vs] : loadSounds(paths)) {
+    auto& list = out[normalizeLmWord(k)];
+    for (auto& v : vs)
+      if (std::find(list.begin(), list.end(), v) == list.end()) list.push_back(v);
   }
   return out;
 }
 
-std::vector<int> PhraseRescorer::labels(const std::vector<std::string>& ws) const {
+PhraseRescorer::Sounds PhraseRescorer::loadSounds(const std::vector<Path>& paths) {
+  Sounds out;
+  for (const auto& path : paths) {
+    std::ifstream f(path, std::ios::binary);
+    std::string line;
+    while (std::getline(f, line)) {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (util::trim(line).empty() || line[0] == '#') continue;
+      auto parts = util::split(line, '\t');
+      auto& list = out[util::trim(parts[0])];
+      for (size_t i = 1; i < parts.size(); i++) {
+        const std::string v = util::trim(parts[i]);
+        if (!v.empty() && std::find(list.begin(), list.end(), v) == list.end()) list.push_back(v);
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<int> PhraseRescorer::labels(const std::vector<std::string>& sounded) const {
+  // A sounded "word" may be empty or hold several words (a personal sound).
+  std::vector<std::string> ws;
+  for (const auto& w : sounded)
+    for (auto& x : words(w)) ws.push_back(std::move(x));
   std::vector<int> out;
   const auto space = index_.find(" ");
   for (size_t k = 0; k < ws.size(); k++) {

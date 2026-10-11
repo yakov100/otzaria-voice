@@ -157,9 +157,10 @@ class PhraseRescorer {
   std::vector<std::string> rescore(const CtcOutput& out, std::vector<std::string> words) const;
   // phrases/talmud_sounds.tsv of the pack: phrase TAB sound [TAB sound]; # = comment.
   // A missing file is empty.
-  static Sounds loadSounds(const Path& path);
+  // Several files merge in order (the pack's, then the speaker's own).
+  static Sounds loadSounds(const std::vector<Path>& paths);
   // phrases/word_sounds.tsv: sound TAB word [TAB word], keys normalized.
-  static Sounds loadWordSounds(const Path& path);
+  static Sounds loadWordSounds(const std::vector<Path>& paths);
   size_t sounded() const { return sounded_; }
   size_t wordSounds() const { return wordSounds_.size(); }
 
