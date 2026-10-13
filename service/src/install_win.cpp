@@ -56,8 +56,18 @@ platform::Path installedExe() { return platform::Path(installDir() + L"\\otzaria
 int install(bool quiet) {
   const std::wstring target = installedExe().wstring();
   const std::wstring self = platform::exePath().wstring();
-  // A running copy (an older version, say) holds the file: ask it to quit first.
+  // A running copy (an older version, say) holds the file: ask it to quit first,
+  // and wait until it is gone. Launched while the old copy still held its
+  // one-instance mutex, the new copy saw "already running" and exited, which
+  // left no service at all until the next login.
   service::postQuit();
+  const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(service::port());
+  for (int i = 0; i < 40; i++) {
+    HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, mutexName.c_str());
+    if (!m) break;
+    CloseHandle(m);
+    Sleep(250);
+  }
   CreateDirectoryW((localAppData() + L"\\Programs").c_str(), nullptr);
   CreateDirectoryW(installDir().c_str(), nullptr);
   if (!sameFile(self, target)) {
