@@ -230,6 +230,15 @@ std::string encodeMp3(const Pcm& pcm) {
   const BOOL ok = ReadFile(f, mp3.data(), DWORD(mp3.size()), &got, nullptr);
   CloseHandle(f);
   if (!ok || got != mp3.size()) throw std::runtime_error("cannot read the MP3 back");
+  // Media Foundation puts an ID3v2.3 tag in front (TFLT, and a COMM frame
+  // with iTunSMPB). Windows' own Media Player stays at 00:00 on such a file;
+  // the same frames without the tag play everywhere. Drop it.
+  if (mp3.size() > 10 && mp3.compare(0, 3, "ID3") == 0) {
+    const auto b = [&](size_t i) { return size_t(static_cast<unsigned char>(mp3[i])); };
+    size_t tag = 10 + ((b(6) & 0x7F) << 21 | (b(7) & 0x7F) << 14 | (b(8) & 0x7F) << 7 | (b(9) & 0x7F));
+    if (b(5) & 0x10) tag += 10;  // footer
+    if (tag < mp3.size()) mp3.erase(0, tag);
+  }
   return mp3;
 }
 
