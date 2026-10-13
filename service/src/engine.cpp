@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -676,6 +677,27 @@ size_t editDistance(const std::u32string& a, const std::u32string& b) {
   return d[b.size()];
 }
 
+// How often each letter occurs (by code point modulo 32, as the Dart port).
+std::array<int, 32> letterCounts(const std::u32string& s) {
+  std::array<int, 32> out{};
+  for (char32_t c : s) out[c % 32]++;
+  return out;
+}
+
+// editDistance(a, b) if it is at most [max] and the lengths differ by at most 3,
+// else -1. The letter counts give a cheap lower bound first: one edit changes
+// them by at most 2.
+int distanceOf(const std::u32string& a, const std::u32string& b, int max,
+               const std::array<int, 32>& ca, const std::array<int, 32>& cb) {
+  const size_t lengthDiff = a.size() > b.size() ? a.size() - b.size() : b.size() - a.size();
+  if (lengthDiff > 3) return -1;
+  int diff = 0;
+  for (size_t k = 0; k < 32; k++) diff += std::abs(ca[k] - cb[k]);
+  if (diff > 2 * max) return -1;
+  const int d = int(editDistance(a, b));
+  return d <= max ? d : -1;
+}
+
 std::vector<std::string> words(const std::string& s) {
   std::vector<std::string> out;
   for (auto& w : util::split(s, ' '))
@@ -705,7 +727,7 @@ PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
   for (const auto& p : phrases) {
     Phrase ph{words(p), normalizeLmWord(p), {}};
     if (ph.words.size() < 2 || skeletonOf(p).empty()) continue;
-    ph.spellings.push_back({ph.words, skeletonOf(p)});
+    ph.spellings.push_back({ph.words, skeletonOf(p), letterCounts(skeletonOf(p))});
     if (auto it = sounds.find(p); it != sounds.end()) {
       for (const auto& s : it->second) {
         if (s == p || skeletonOf(s).empty()) continue;
@@ -719,7 +741,7 @@ PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
           sw.resize(ph.words.size());
           sw.back() = tail;
         }
-        ph.spellings.push_back({std::move(sw), skeletonOf(s)});
+        ph.spellings.push_back({std::move(sw), skeletonOf(s), letterCounts(skeletonOf(s))});
       }
     }
     if (ph.spellings.size() > 1) sounded_++;
@@ -727,9 +749,22 @@ PhraseRescorer::PhraseRescorer(const std::vector<std::string>& vocab, int blank,
   }
   for (size_t pi = 0; pi < phrases_.size(); pi++)
     for (size_t si = 0; si < phrases_[pi].spellings.size(); si++) {
-      byLength_[phrases_[pi].spellings[si].skeleton.size()].push_back(flat_.size());
+      const size_t n = phrases_[pi].spellings[si].skeleton.size();
+      byLength_[n].push_back(flat_.size());
       flat_.push_back({pi, si});
+      maxDistance_ = std::max(maxDistance_, int(kLoose * double(n)));
     }
+}
+
+std::vector<std::pair<size_t, int>> PhraseRescorer::matches(const std::u32string& ss) const {
+  const auto counts = letterCounts(ss);
+  std::vector<std::pair<size_t, int>> out;
+  for (size_t id : closeTo(ss.size())) {
+    const auto& sp = phrases_[flat_[id].first].spellings[flat_[id].second];
+    const int d = distanceOf(ss, sp.skeleton, int(kLoose * double(sp.skeleton.size())), counts, sp.counts);
+    if (d >= 0) out.push_back({id, d});
+  }
+  return out;
 }
 
 // Spellings whose skeleton length is within 3 of [n], in list order.
@@ -842,10 +877,15 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
   const int v = out.vocab;
   std::vector<double> probs(out.logProbs.size());
   for (size_t k = 0; k < probs.size(); k++) probs[k] = std::exp(double(out.logProbs[k]));
-  // The same candidate comes back from several spans and every round.
+  // The same candidate comes back from several spans and every round. The key
+  // separates words by a character no word holds: a sounded word may hold a space.
   std::unordered_map<std::string, double> memo;
   auto keyOf = [](const std::vector<std::string>& w, const std::vector<std::string>& s) {
-    return join(s, 0, s.size()) + '\x01' + join(w, 0, w.size());
+    std::string key;
+    for (const auto& x : s) key += x + '\x02';
+    key += '\x01';
+    for (const auto& x : w) key += x + '\x02';
+    return key;
   };
   auto score = [&](const std::vector<std::string>& w, const std::vector<std::string>& s) {
     return ctcLogProb(probs, out.frames, v, labels(s)) + lmScore(w);
@@ -855,44 +895,124 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
     std::string key;
   };
   const unsigned threads = std::max(1u, std::min(6u, std::thread::hardware_concurrency()));
+  // Skeleton -> the spellings close to it: most spans and glued words come back
+  // unchanged in the next round.
+  std::unordered_map<std::u32string, std::vector<std::pair<size_t, int>>> matchCache;
+  auto matchesOf = [&](const std::u32string& ss) -> const std::vector<std::pair<size_t, int>>& {
+    auto it = matchCache.find(ss);
+    if (it == matchCache.end()) it = matchCache.emplace(ss, matches(ss)).first;
+    return it->second;
+  };
 
   // Each word is written one way and scored against the audio another; only the
   // words of a swapped-in phrase differ.
   std::vector<std::string> sounded = written;
+  // Candidates that may still be scored; a memo hit is free.
+  size_t remaining = maxCandidates;
   for (int round = 0; round < kMaxRounds; round++) {
+    if (remaining == 0) break;
+    // This round's share: half of what is left (the last round gets the rest).
+    // Most wins, and the largest, are in the first round; what a round does not
+    // use flows on.
+    const int roundsLeft = kMaxRounds - round;
+    const size_t cap = roundsLeft == 1 ? remaining : (remaining + 1) / 2;
     const std::string curKey = keyOf(written, sounded);
     if (!memo.count(curKey)) memo.emplace(curKey, score(written, sounded));
     double best = memo[curKey];
-    // Collect this round's candidates in order, score the new ones on several
-    // threads, then take the first best in order: the same pick as one by one.
+    // Collect this round's candidates in order (up to the share), score the new
+    // ones on several threads, then take the first best in order: the same pick
+    // as one by one.
     std::vector<Cand> cands;
+    std::vector<size_t> todo;  // the new ones, as indices into cands
+    std::unordered_set<std::string> queued;
+    // False once the share is spent: the caller stops generating. The budget is
+    // checked before every candidate, memo hit or not, so generation stops at a
+    // fixed point that does not depend on speed.
     auto add = [&](std::vector<std::string> cw, std::vector<std::string> cs) {
+      if (todo.size() >= cap) return false;
       std::string key = keyOf(cw, cs);
+      if (!memo.count(key) && queued.insert(key).second) todo.push_back(cands.size());
       cands.push_back({std::move(cw), std::move(cs), std::move(key)});
-    };
-    auto close = [&](const std::u32string& ss, const std::u32string& sp) {
-      return double(editDistance(ss, sp)) <= kLoose * double(sp.size());
+      return true;
     };
 
+    // The candidates of a round, in the order the budget is spent, chosen by the
+    // chance to win: nearly every swap that is kept has the phrase's exact
+    // skeleton (distance 0), a few are at distance 1 or 2, although the
+    // threshold allows up to half the skeleton's length. So all candidates at
+    // distance 0 first, then distance 1, and so on; at the same distance:
+    // 1. word-sound swaps (a few per sentence, no acoustic work); 2. spans of
+    // whole words, by spelling in list order (the phrases are sorted by
+    // frequency, a phrase before its sounds), and per spelling the shorter spans
+    // first, left to right; 3. glued-word splits (only words the LM does not
+    // know), which are several times as many and win more rarely, in their
+    // generation order. As candidates() in the spec.
     // 1. A word written exactly as a frequent word sounds ("קרו" = קְרָא): the
     // audio stays, only the LM judges the spelling.
-    for (size_t k = 0; k < written.size(); k++) {
+    bool open = true;
+    for (size_t k = 0; k < written.size() && open; k++) {
       if (written[k] != sounded[k]) continue;
       auto it = wordSounds_.find(normalizeLmWord(written[k]));
       if (it == wordSounds_.end()) continue;
       for (const auto& x : it->second) {
         auto cw = written;
         cw[k] = x;
-        add(std::move(cw), sounded);
+        if (!(open = add(std::move(cw), sounded))) break;
       }
     }
 
-    // 2. Inside a word the LM does not know, glued by the beam ("הבוייסאמקרו"):
+    // The matches of the next two stages by skeleton distance: only a short
+    // description of each; the full sentence is built when its turn comes.
+    // 2. Spans of whole words, shortest first, left to right: spelling << 10 | span.
+    struct Span {
+      size_t i, j;
+      std::u32string skeleton;
+      std::string norm;
+    };
+    std::vector<Span> spans;
+    for (size_t n = 1; n <= std::min(written.size(), kMaxSpan); n++)
+      for (size_t i = 0; i + n <= written.size(); i++)
+        spans.push_back({i, i + n, skeletonOf(join(written, i, i + n)),
+                         normalizeLmWord(join(written, i, i + n))});
+    std::vector<std::vector<uint32_t>> spanHits(size_t(maxDistance_) + 1);
+    for (size_t n = 0; n < spans.size(); n++)
+      for (const auto& [id, d] : matchesOf(spans[n].skeleton)) {
+        if (spans[n].norm == phrases_[flat_[id].first].norm) continue;
+        spanHits[size_t(d)].push_back(uint32_t(id) << 10 | uint32_t(n));
+      }
+    for (auto& bucket : spanHits) std::sort(bucket.begin(), bucket.end());
+
+    // 3. Inside a word the LM does not know, glued by the beam ("הבוייסאמקרו"):
     // part of it becomes a phrase, the rest stays as words ("ה" + איבעית אימא +
-    // "קרו"); a leftover of one or two letters may also be dropped. A leftover
-    // may also take its word-sounds spelling in the same step: "קרו" alone
-    // after the phrase scores worse than the glued word, "קרא" better.
-    // (written, sounded) choices for a leftover; {"", ""} = none.
+    // "קרו"): (word, start, end, spelling).
+    struct Glued {
+      size_t k, a, b, id;
+    };
+    std::vector<std::vector<Glued>> gluedHits(size_t(maxDistance_) + 1);
+    std::vector<std::vector<std::string>> charsOf(written.size());
+    for (size_t k = 0; k < written.size(); k++) {
+      const std::string& w = written[k];
+      if (w != sounded[k]) continue;
+      charsOf[k] = util::utf8Chars(w);
+      const auto& chars = charsOf[k];
+      std::string stripped;
+      for (char c : w)
+        if (c != '"' && c != '\'') stripped += c;
+      if (chars.size() < 4 || lm_.idOf(normalizeLmWord(stripped)) >= 0) continue;
+      for (size_t a = 0; a < chars.size(); a++) {
+        for (size_t b = a + 1; b <= chars.size(); b++) {
+          if (a == 0 && b == chars.size()) continue;
+          std::string piece;
+          for (size_t c = a; c < b; c++) piece += chars[c];
+          for (const auto& [id, d] : matchesOf(skeletonOf(piece)))
+            gluedHits[size_t(d)].push_back({k, a, b, id});
+        }
+      }
+    }
+    // A leftover of one or two letters may also be dropped (often the phrase's
+    // own vowel, heard twice), and a leftover may take its word-sounds spelling
+    // in the same step: "קרו" alone after the phrase scores worse than the glued
+    // word, "קרא" better. (written, sounded) choices for a leftover; {"", ""} = none.
     auto leftovers = [&](const std::string& piece, bool keep) {
       std::vector<std::pair<std::string, std::string>> out;
       if (piece.empty() || !keep) return decltype(out){{"", ""}};
@@ -901,81 +1021,53 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
         for (const auto& x : it->second) out.push_back({x, piece});
       return out;
     };
-    for (size_t k = 0; k < written.size(); k++) {
-      const std::string& w = written[k];
-      if (w != sounded[k]) continue;
-      const auto chars = util::utf8Chars(w);
-      std::string stripped;
-      for (char c : w)
-        if (c != '"' && c != '\'') stripped += c;
-      if (chars.size() < 4 || lm_.idOf(normalizeLmWord(stripped)) >= 0) continue;
+    auto expandGlued = [&](const Glued& g) {
+      const auto& chars = charsOf[g.k];
       auto piece = [&](size_t a, size_t b) {
         std::string s;
         for (size_t c = a; c < b; c++) s += chars[c];
         return s;
       };
-      for (size_t a = 0; a < chars.size(); a++) {
-        for (size_t b = a + 1; b <= chars.size(); b++) {
-          if (a == 0 && b == chars.size()) continue;
-          const std::u32string ss = skeletonOf(piece(a, b));
-          const std::string pre = piece(0, a), post = piece(b, chars.size());
-          const size_t preLen = a, postLen = chars.size() - b;
-          for (size_t id : closeTo(ss.size())) {
-            const auto& ph = phrases_[flat_[id].first];
-            const auto& sp = ph.spellings[flat_[id].second];
-            if (!close(ss, sp.skeleton)) continue;
-            for (int keepPre = 1; keepPre >= (preLen > 0 && preLen <= 2 ? 0 : 1); keepPre--) {
-              for (int keepPost = 1; keepPost >= (postLen > 0 && postLen <= 2 ? 0 : 1); keepPost--) {
-                for (const auto& left : leftovers(pre, preLen && keepPre)) {
-                  for (const auto& right : leftovers(post, postLen && keepPost)) {
-                    std::vector<std::string> cw(written.begin(), written.begin() + k);
-                    std::vector<std::string> cs(sounded.begin(), sounded.begin() + k);
-                    if (!left.first.empty()) cw.push_back(left.first), cs.push_back(left.second);
-                    cw.insert(cw.end(), ph.words.begin(), ph.words.end());
-                    cs.insert(cs.end(), sp.words.begin(), sp.words.end());
-                    if (!right.first.empty()) cw.push_back(right.first), cs.push_back(right.second);
-                    cw.insert(cw.end(), written.begin() + k + 1, written.end());
-                    cs.insert(cs.end(), sounded.begin() + k + 1, sounded.end());
-                    add(std::move(cw), std::move(cs));
-                  }
-                }
-              }
+      const auto& ph = phrases_[flat_[g.id].first];
+      const auto& sp = ph.spellings[flat_[g.id].second];
+      const std::string pre = piece(0, g.a), post = piece(g.b, chars.size());
+      const size_t preLen = g.a, postLen = chars.size() - g.b;
+      for (int keepPre = 1; keepPre >= (preLen > 0 && preLen <= 2 ? 0 : 1); keepPre--) {
+        for (int keepPost = 1; keepPost >= (postLen > 0 && postLen <= 2 ? 0 : 1); keepPost--) {
+          for (const auto& left : leftovers(pre, preLen && keepPre)) {
+            for (const auto& right : leftovers(post, postLen && keepPost)) {
+              std::vector<std::string> cw(written.begin(), written.begin() + g.k);
+              std::vector<std::string> cs(sounded.begin(), sounded.begin() + g.k);
+              if (!left.first.empty()) cw.push_back(left.first), cs.push_back(left.second);
+              cw.insert(cw.end(), ph.words.begin(), ph.words.end());
+              cs.insert(cs.end(), sp.words.begin(), sp.words.end());
+              if (!right.first.empty()) cw.push_back(right.first), cs.push_back(right.second);
+              cw.insert(cw.end(), written.begin() + g.k + 1, written.end());
+              cs.insert(cs.end(), sounded.begin() + g.k + 1, sounded.end());
+              if (!add(std::move(cw), std::move(cs))) return false;
             }
           }
         }
       }
+      return true;
+    };
+    for (int d = 0; d <= maxDistance_ && open; d++) {
+      for (uint32_t packed : spanHits[size_t(d)]) {
+        const auto& ph = phrases_[flat_[packed >> 10].first];
+        const auto& sp = ph.spellings[flat_[packed >> 10].second];
+        const Span& span = spans[packed & 1023];
+        std::vector<std::string> cw(written.begin(), written.begin() + span.i);
+        cw.insert(cw.end(), ph.words.begin(), ph.words.end());
+        cw.insert(cw.end(), written.begin() + span.j, written.end());
+        std::vector<std::string> cs(sounded.begin(), sounded.begin() + span.i);
+        cs.insert(cs.end(), sp.words.begin(), sp.words.end());
+        cs.insert(cs.end(), sounded.begin() + span.j, sounded.end());
+        if (!(open = add(std::move(cw), std::move(cs)))) break;
+      }
+      for (size_t g = 0; g < gluedHits[size_t(d)].size() && open; g++)
+        open = expandGlued(gluedHits[size_t(d)][g]);
     }
 
-    // 3. Spans of whole words.
-    for (size_t i = 0; i < written.size(); i++) {
-      for (size_t j = i + 1; j <= std::min(written.size(), i + kMaxSpan); j++) {
-        const std::string span = join(written, i, j);
-        const std::u32string ss = skeletonOf(span);
-        const std::string spanNorm = normalizeLmWord(span);
-        for (size_t id : closeTo(ss.size())) {
-          const auto& ph = phrases_[flat_[id].first];
-          if (spanNorm == ph.norm) continue;
-          {
-            const auto& sp = ph.spellings[flat_[id].second];
-            if (!close(ss, sp.skeleton)) continue;
-            std::vector<std::string> cw(written.begin(), written.begin() + i);
-            cw.insert(cw.end(), ph.words.begin(), ph.words.end());
-            cw.insert(cw.end(), written.begin() + j, written.end());
-            std::vector<std::string> cs(sounded.begin(), sounded.begin() + i);
-            cs.insert(cs.end(), sp.words.begin(), sp.words.end());
-            cs.insert(cs.end(), sounded.begin() + j, sounded.end());
-            std::string key = keyOf(cw, cs);
-            cands.push_back({std::move(cw), std::move(cs), std::move(key)});
-          }
-        }
-      }
-    }
-    std::vector<size_t> todo;
-    {
-      std::unordered_set<std::string> queued;
-      for (size_t k = 0; k < cands.size(); k++)
-        if (!memo.count(cands[k].key) && queued.insert(cands[k].key).second) todo.push_back(k);
-    }
     std::vector<double> scores(todo.size());
     if (todo.size() < 8 || threads == 1) {
       for (size_t n = 0; n < todo.size(); n++) scores[n] = score(cands[todo[n]].w, cands[todo[n]].s);
@@ -990,6 +1082,7 @@ std::vector<std::string> PhraseRescorer::rescore(const CtcOutput& out,
       for (auto& th : pool) th.join();
     }
     for (size_t n = 0; n < todo.size(); n++) memo.emplace(cands[todo[n]].key, scores[n]);
+    remaining -= todo.size();
     const Cand* pick = nullptr;
     for (const auto& c : cands) {
       const double s = memo[c.key];

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
@@ -145,11 +146,21 @@ class CtcDecoder {
 // only when acoustic CTC log-prob + LM of the whole sentence rises. [sounds] gives
 // how a phrase sounds (yeshivish, "תו שמע" for "תא שמע"): the audio is scored
 // against the best spelling, the LM and the output use the phrase as written.
+// The work is bounded by [maxCandidates], so the output never depends on how
+// fast the machine is (see rescore for the order the budget is spent in).
 // Port of lib/voice_input/engine/phrase_rescorer.dart in Otzaria (spec:
 // tool/voice_eval/phrase_rescore.py there).
 class PhraseRescorer {
  public:
   using Sounds = std::map<std::string, std::vector<std::string>>;
+  // Candidate sentences scored per segment at most, all rounds together (the
+  // sentence as decoded and sentences scored before do not count); each round
+  // gets half of what is left, and when it runs out the best sentence found so
+  // far is returned. MAX_CANDIDATES in the spec: the largest value at which the
+  // Dart second pass stays under ~0.5 s median / ~1.5 s max on 10-s sentences.
+  // A huge budget gives the same output as no budget.
+  static constexpr size_t kDefaultMaxCandidates = 6000;
+  size_t maxCandidates = kDefaultMaxCandidates;
   // [wordSounds]: frequent words by how they sound (loadWordSounds): a word the
   // beam wrote exactly as such a sound ("קרו") may take the word's spelling (קרא).
   PhraseRescorer(const std::vector<std::string>& vocab, int blank, const NgramLm& lm,
@@ -169,6 +180,7 @@ class PhraseRescorer {
   struct Spelling {
     std::vector<std::string> words;
     std::u32string skeleton;
+    std::array<int, 32> counts;  // letters by code point modulo 32
   };
   struct Phrase {
     std::vector<std::string> words;
@@ -189,6 +201,11 @@ class PhraseRescorer {
   std::vector<std::pair<size_t, size_t>> flat_;
   std::map<size_t, std::vector<size_t>> byLength_;
   std::vector<size_t> closeTo(size_t skeletonLength) const;
+  // The spellings whose skeleton is close to [ss] (lengths within 3, edit
+  // distance at most kLoose of the spelling's length), with the distance, in
+  // list order.
+  std::vector<std::pair<size_t, int>> matches(const std::u32string& ss) const;
+  int maxDistance_ = 0;  // the largest distance the threshold allows
   Sounds wordSounds_;
   size_t sounded_ = 0;
 };
