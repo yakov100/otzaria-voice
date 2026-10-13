@@ -25,6 +25,7 @@ set(SRC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(COMMON_SOURCES
   ${SRC}/audio.cpp
   ${SRC}/engine.cpp
+  ${SRC}/narrator.cpp
   ${SRC}/pack.cpp
   ${SRC}/platform.cpp
   ${SRC}/service.cpp

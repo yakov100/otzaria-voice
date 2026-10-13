@@ -19,12 +19,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
+#include "narrator.h"
 #include "platform.h"
 
 namespace speech {
@@ -237,38 +240,79 @@ VoiceInformation hebrewVoice() {
   return nullptr;
 }
 
-void run(std::wstring text, double rate) {
+/** The system voice: Windows.Media.SpeechSynthesis, piece by piece. */
+Pcm speakSystem(const std::wstring& text, double rate) {
+  const VoiceInformation voice = hebrewVoice();
+  if (!voice) throw std::runtime_error("no_hebrew_voice");
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    current.voice = narrow(std::wstring(voice.DisplayName()));
+  }
+  SpeechSynthesizer synth;
+  synth.Voice(voice);
+  synth.Options().SpeakingRate(std::clamp(rate, 0.5, 3.0));
+
+  Pcm pcm;
+  uint64_t done = 0;
+  for (const auto& piece : piecesOf(text)) {
+    if (cancelFlag) throw std::runtime_error("cancelled");
+    auto audio = synth.SynthesizeTextToStreamAsync(piece).get();
+    const auto size = uint32_t(audio.Size());
+    DataReader reader(audio.GetInputStreamAt(0));
+    reader.LoadAsync(size).get();
+    std::vector<uint8_t> wav(size);
+    reader.ReadBytes(wav);
+    appendWav(wav, pcm);
+    done += piece.size();
+    std::lock_guard<std::mutex> lock(mu);
+    current.doneChars = done;
+    current.seconds = pcm.rate ? double(pcm.samples.size()) / pcm.rate : 0;
+  }
+  return pcm;
+}
+
+/** A neural voice (narrator.h): slower, about twice the length of the audio. */
+Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
+  if (!narrator::modelReady()) throw std::runtime_error("voice_model_missing");
+  if (voiceId.find_first_of("/\\:.") != std::string::npos) throw std::runtime_error("unknown_voice");
+  const auto voicePath = narrator::voicesDir() / platform::fromUtf8(voiceId + ".otzvoice");
+  std::error_code ec;
+  if (!std::filesystem::exists(voicePath, ec)) throw std::runtime_error("unknown_voice");
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    current.voice = voiceId;
+  }
+  const int threads = std::max(2, std::min(8, int(std::thread::hardware_concurrency() / 2)));
+  narrator::Narrator model(ort, narrator::modelDir(), threads);
+  const narrator::Voice voice = narrator::Voice::load(voicePath);
+  Pcm pcm;
+  pcm.rate = narrator::kSampleRate;
+  const std::string utf8 = narrow(text);
+  uint64_t done = 0;
+  for (const auto& piece : narrator::pieces(utf8)) {
+    if (cancelFlag) throw std::runtime_error("cancelled");
+    const auto audio = model.speak(model.vocalize(piece), voice, [] { return bool(cancelFlag); });
+    if (cancelFlag) throw std::runtime_error("cancelled");
+    for (float x : audio) pcm.samples.push_back(int16_t(std::lround(std::clamp(x, -1.0f, 1.0f) * 32767)));
+    pcm.samples.insert(pcm.samples.end(), narrator::kSampleRate / 6, int16_t(0));  // a breath between sentences
+    done += widen(piece).size();
+    std::lock_guard<std::mutex> lock(mu);
+    current.doneChars = std::min<uint64_t>(done, current.totalChars);
+    current.seconds = double(pcm.samples.size()) / pcm.rate;
+  }
+  return pcm;
+}
+
+void run(std::wstring text, double rate, std::string voiceId) {
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
   std::string error;
   std::string mp3;
   bool cancelled = false;
   try {
-    const VoiceInformation voice = hebrewVoice();
-    if (!voice) throw std::runtime_error("no_hebrew_voice");
-    {
-      std::lock_guard<std::mutex> lock(mu);
-      current.voice = narrow(std::wstring(voice.DisplayName()));
-    }
-    SpeechSynthesizer synth;
-    synth.Voice(voice);
-    synth.Options().SpeakingRate(std::clamp(rate, 0.5, 3.0));
-
-    Pcm pcm;
-    uint64_t done = 0;
-    for (const auto& piece : piecesOf(text)) {
-      if (cancelFlag) throw std::runtime_error("cancelled");
-      auto audio = synth.SynthesizeTextToStreamAsync(piece).get();
-      const auto size = uint32_t(audio.Size());
-      DataReader reader(audio.GetInputStreamAt(0));
-      reader.LoadAsync(size).get();
-      std::vector<uint8_t> wav(size);
-      reader.ReadBytes(wav);
-      appendWav(wav, pcm);
-      done += piece.size();
-      std::lock_guard<std::mutex> lock(mu);
-      current.doneChars = done;
-      current.seconds = pcm.rate ? double(pcm.samples.size()) / pcm.rate : 0;
-    }
+    const bool system = voiceId.empty() || voiceId == "system";
+    Pcm pcm = system ? speakSystem(text, rate) : speakNeural(text, voiceId);
     if (pcm.samples.empty()) throw std::runtime_error("nothing to read");
     mp3 = encodeMp3(resampleForMp3(pcm));
     if (mp3.size() > kMaxResult) throw std::runtime_error("too_large");
@@ -305,7 +349,7 @@ void cancelLocked() {
 
 bool supported() { return true; }
 
-bool start(const std::string& text, double rate, std::string& error) {
+bool start(const std::string& text, double rate, const std::string& voice, std::string& error) {
   std::lock_guard<std::mutex> job(jobMu);
   cancelLocked();
   std::wstring wide = widen(text);
@@ -319,7 +363,7 @@ bool start(const std::string& text, double rate, std::string& error) {
   current.state = "working";
   current.totalChars = wide.size();
   result.clear();
-  worker = std::thread(run, std::move(wide), rate);
+  worker = std::thread(run, std::move(wide), rate, voice);
   return true;
 }
 

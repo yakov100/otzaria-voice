@@ -24,9 +24,11 @@ struct Status {
 
 bool supported();
 
-// Starts reading [text] (UTF-8) at [rate] (1 = normal, 0.5 .. 3). A running
-// job is cancelled first. Returns false with [error] when it cannot start.
-bool start(const std::string& text, double rate, std::string& error);
+// Starts reading [text] (UTF-8) at [rate] (1 = normal, 0.5 .. 3) in [voice]:
+// "" or "system" for the system's Hebrew voice, otherwise an installed
+// neural voice (narrator.h; the rate does not apply to it). A running job is
+// cancelled first. Returns false with [error] when it cannot start.
+bool start(const std::string& text, double rate, const std::string& voice, std::string& error);
 
 Status status();
 

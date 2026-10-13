@@ -5,7 +5,7 @@ namespace speech {
 
 bool supported() { return false; }
 
-bool start(const std::string&, double, std::string& error) {
+bool start(const std::string&, double, const std::string&, std::string& error) {
   error = "unsupported";
   return false;
 }

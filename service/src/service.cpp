@@ -27,9 +27,11 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -37,6 +39,7 @@
 #include <thread>
 
 #include "json.h"
+#include "narrator.h"
 #include "pack.h"
 #include "speech.h"
 #include "talmud_phrases.h"
@@ -370,6 +373,12 @@ std::string base64(const char* data, size_t n) {
   return out;
 }
 
+std::string voicesJson() {
+  std::string out = "[";
+  for (const auto& v : narrator::installedVoices()) out += (out.size() > 1 ? "," : "") + json::quote(v);
+  return out + "]";
+}
+
 std::string speakStatus() {
   const auto st = speech::status();
   char seconds[32];
@@ -380,24 +389,25 @@ std::string speakStatus() {
          ",\"bytes\":" + std::to_string(st.bytes) + "}";
 }
 
-/** POST /speak {"text", "rate"}: starts reading into an MP3 in the background. */
+/** POST /speak {"text", "rate", "voice"}: starts reading into an MP3 in the background. */
 void speak(Socket s, const Request& req) {
   if (!speech::supported()) {
     respond(s, 501, errorBody("unsupported", "reading aloud to a file needs Windows"));
     return;
   }
-  std::string text;
+  std::string text, voice;
   double rate = 1.0;
   try {
     auto b = json::parse(req.body);
     text = b["text"].str();
     if (b["rate"].kind == json::Value::Number) rate = b["rate"].num();
+    if (b["voice"].kind == json::Value::String) voice = b["voice"].str();
   } catch (...) {
     respond(s, 400, errorBody("bad_request", "body must be JSON with a text"));
     return;
   }
   std::string error;
-  if (!speech::start(text, rate, error)) {
+  if (!speech::start(text, rate, voice, error)) {
     respond(s, 400, errorBody(error, "cannot start reading"));
     return;
   }
@@ -483,7 +493,8 @@ void handle(Socket s) {
                   ",\"microphone\":" + (microphoneAllowed ? "true" : "false") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
                   ",\"busy\":" + (active ? "true" : "false") +
-                  ",\"speak\":" + (speech::supported() ? "true" : "false") + "}");
+                  ",\"speak\":" + (speech::supported() ? "true" : "false") + ",\"voiceModel\":" +
+                  (narrator::modelReady() ? "true" : "false") + ",\"voices\":" + voicesJson() + "}");
     } else if (req.method == "POST" && req.path == "/dictate") {
       if (packBusy())
         respond(s, 503, errorBody("pack_installing", "the voice pack is being installed"));
@@ -750,6 +761,82 @@ int evaluate(const platform::Path& manifest, const platform::Path& outPath) {
     fflush(out);
   }
   fclose(out);
+  return 0;
+}
+
+static void writeWav16(const platform::Path& path, const std::vector<float>& pcm, int rate) {
+  std::ofstream f(path, std::ios::binary);
+  auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+  auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
+  const uint32_t bytes = uint32_t(pcm.size() * 2);
+  f.write("RIFF", 4);
+  u32(36 + bytes);
+  f.write("WAVEfmt ", 8);
+  u32(16);
+  u16(1);
+  u16(1);
+  u32(uint32_t(rate));
+  u32(uint32_t(rate) * 2);
+  u16(2);
+  u16(16);
+  f.write("data", 4);
+  u32(bytes);
+  for (float x : pcm) {
+    const int16_t v = int16_t(std::lround(std::clamp(x, -1.0f, 1.0f) * 32767));
+    f.write(reinterpret_cast<const char*>(&v), 2);
+  }
+}
+
+int narrateTest(const platform::Path& models, const platform::Path& voicePath, const platform::Path& text,
+                const platform::Path& outDir) {
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
+  const int threads = std::max(2, std::min(8, int(std::thread::hardware_concurrency() / 2)));
+  auto t0 = std::chrono::steady_clock::now();
+  narrator::Narrator n(ort, models, threads);
+  const auto voice = narrator::Voice::load(voicePath);
+  auto ms = [](auto a, auto b) {
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+  };
+  std::filesystem::create_directories(outDir);
+#ifdef _WIN32
+  FILE* report = _wfopen((outDir / "report.jsonl").c_str(), L"wb");
+#else
+  FILE* report = fopen((outDir / "report.jsonl").c_str(), "wb");
+#endif
+  if (!report) return 2;
+  fprintf(report, "{\"load_ms\":%lld,\"ort\":%s}\n", ms(t0, std::chrono::steady_clock::now()),
+          json::quote(platform::toUtf8(ort)).c_str());
+  std::ifstream in(text, std::ios::binary);
+  std::string line;
+  int lineNo = 0;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (util::trim(line).empty()) continue;
+    lineNo++;
+    std::vector<float> all;
+    for (const auto& piece : narrator::pieces(line)) {
+      const auto t1 = std::chrono::steady_clock::now();
+      const std::string vocalized = n.vocalize(piece);
+      const auto t2 = std::chrono::steady_clock::now();
+      const auto pcm = n.speak(vocalized, voice, [] { return false; });
+      const auto t3 = std::chrono::steady_clock::now();
+      std::string ids;
+      for (auto id : n.textTokens(vocalized)) ids += (ids.empty() ? "" : ",") + std::to_string(id);
+      fprintf(report,
+              "{\"line\":%d,\"piece\":%s,\"vocalized\":%s,\"tokens\":[%s],\"seconds\":%.2f,"
+              "\"nikud_ms\":%lld,\"speak_ms\":%lld}\n",
+              lineNo, json::quote(piece).c_str(), json::quote(vocalized).c_str(), ids.c_str(),
+              double(pcm.size()) / narrator::kSampleRate, ms(t1, t2), ms(t2, t3));
+      fflush(report);
+      all.insert(all.end(), pcm.begin(), pcm.end());
+      all.insert(all.end(), narrator::kSampleRate / 6, 0.0f);  // a short pause between pieces
+    }
+    char name[32];
+    snprintf(name, sizeof name, "%02d.wav", lineNo);
+    writeWav16(outDir / name, all, narrator::kSampleRate);
+  }
+  fclose(report);
   return 0;
 }
 

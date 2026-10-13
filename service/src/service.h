@@ -30,6 +30,11 @@ void postQuit();
 // --eval <manifest.jsonl> <out.jsonl>: offline and live-simulated transcripts.
 int evaluate(const platform::Path& manifest, const platform::Path& out);
 
+// --narrate <models> <voice> <text.txt> <out dir>: reads each line of the text
+// in the voice; writes NN.wav and report.jsonl (vocalized text, tokens, times).
+int narrateTest(const platform::Path& models, const platform::Path& voice, const platform::Path& text,
+                const platform::Path& outDir);
+
 // One dictation at a time: plugin (POST /dictate) or typing (Windows hotkey).
 extern std::mutex sessionMu;
 extern std::atomic<bool> active;

@@ -4,6 +4,7 @@
 //   otzaria-voice --install [--quiet]   install for this user, start at login, run now
 //   otzaria-voice --uninstall [--quiet] stop, remove login start and program files
 //   otzaria-voice --eval <manifest.jsonl> <out.jsonl>   accuracy evaluation
+//   otzaria-voice --narrate <models> <voice> <text.txt> <out dir>   reading-aloud test
 //   otzaria-voice --version
 //
 // Windows: started without arguments (double-clicked from a download) it
@@ -34,6 +35,15 @@ int run(const std::vector<std::string>& args) {
       return service::evaluate(platform::fromUtf8(args[2]), platform::fromUtf8(args[3]));
     } catch (const std::exception& ex) {
       platform::log(std::string("eval: ") + ex.what());
+      return 3;
+    }
+  }
+  if (arg == "--narrate" && args.size() > 5) {
+    try {
+      return service::narrateTest(platform::fromUtf8(args[2]), platform::fromUtf8(args[3]),
+                                  platform::fromUtf8(args[4]), platform::fromUtf8(args[5]));
+    } catch (const std::exception& ex) {
+      platform::log(std::string("narrate: ") + ex.what());
       return 3;
     }
   }
