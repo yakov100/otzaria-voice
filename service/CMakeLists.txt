@@ -26,6 +26,7 @@ set(COMMON_SOURCES
   ${SRC}/audio.cpp
   ${SRC}/engine.cpp
   ${SRC}/narrator.cpp
+  ${SRC}/voicemodel.cpp
   ${SRC}/pack.cpp
   ${SRC}/platform.cpp
   ${SRC}/service.cpp

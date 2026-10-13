@@ -50,13 +50,16 @@ struct Voice {
   Voice shortened(double seconds) const;
 };
 
-// Where the models and the voices live: <Otzaria data>/tts/pack and
-// <Otzaria data>/tts/voices (OTZARIA_NARRATOR_DIR replaces the pack folder).
+// Where the models and the voices live: <Otzaria data>/tts/pack (with the
+// voices that ship in it, pack/voices) and <Otzaria data>/tts/voices for
+// voices made on this computer. OTZARIA_NARRATOR_DIR replaces the pack folder.
 platform::Path modelDir();
 platform::Path voicesDir();
 bool modelReady();
-// The voices installed, by file name without ".otzvoice" (sorted).
+// The voices installed, by file name without ".otzvoice" (sorted, unique).
 std::vector<std::string> installedVoices();
+// The file of voice [id] (the computer's own voices first); empty if none.
+platform::Path voicePath(const std::string& id);
 
 // The text split into sentences short enough for one generation each
 // (a sentence end, else a comma, else a space). UTF-8 in and out.

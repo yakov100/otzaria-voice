@@ -284,10 +284,8 @@ Pcm speakSystem(const std::wstring& text, double rate) {
 /** A neural voice (narrator.h): slower, about twice the length of the audio. */
 Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
   if (!narrator::modelReady()) throw std::runtime_error("voice_model_missing");
-  if (voiceId.find_first_of("/\\:.") != std::string::npos) throw std::runtime_error("unknown_voice");
-  const auto voicePath = narrator::voicesDir() / platform::fromUtf8(voiceId + ".otzvoice");
-  std::error_code ec;
-  if (!std::filesystem::exists(voicePath, ec)) throw std::runtime_error("unknown_voice");
+  const auto voicePath = narrator::voicePath(voiceId);
+  if (voicePath.empty()) throw std::runtime_error("unknown_voice");
   const auto ort = platform::findOnnxRuntime();
   if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
   {

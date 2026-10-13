@@ -6,7 +6,9 @@
 #include <windows.h>
 
 #include "install.h"
+#include "pack.h"
 #include "service.h"
+#include "voicemodel.h"
 #include "util.h"
 
 namespace install {
@@ -124,7 +126,11 @@ int uninstall(bool quiet) {
   }
   RegDeleteKeyW(HKEY_CURRENT_USER, kUninstallKey);
   service::postQuit();
-  platform::log("uninstalled");
+  // The downloaded packs (dictation, reading aloud: up to 1.3GB) go too;
+  // voices the user recorded stay in Otzaria's data folder.
+  Sleep(500);  // let the service close the pack's files
+  const uint64_t freed = pack::removeInstalled() + voicemodel::removeInstalled();
+  platform::log("uninstalled, freed " + std::to_string(freed >> 20) + " MB of packs");
   // A running program cannot delete its own file: a hidden shell does it a
   // moment after this process exits.
   const std::wstring cmd = L"cmd.exe /c ping -n 3 127.0.0.1 >nul & del /f /q \"" +
@@ -140,7 +146,7 @@ int uninstall(bool quiet) {
     CloseHandle(pi.hProcess);
   }
   if (!quiet)
-    message(L"שירות הדיבור הוסר.", MB_ICONINFORMATION);  // שירות הדיבור הוסר.
+    message(L"שירות הדיבור הוסר, יחד עם חבילות הקול שהורדו.", MB_ICONINFORMATION);  // שירות הדיבור הוסר, יחד עם חבילות הקול שהורדו.
   return 0;
 }
 

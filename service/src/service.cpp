@@ -44,10 +44,11 @@
 #include "speech.h"
 #include "talmud_phrases.h"
 #include "util.h"
+#include "voicemodel.h"
 
 namespace service {
 
-const char* kVersion = "1.1.0";
+const char* kVersion = "2.1.0";
 
 namespace {
 
@@ -373,6 +374,17 @@ std::string base64(const char* data, size_t n) {
   return out;
 }
 
+std::string voiceModelJob() {
+  const auto p = voicemodel::progress();
+  return "{\"state\":" + json::quote(p.state) + ",\"received\":" + std::to_string(p.received) +
+         ",\"total\":" + std::to_string(p.total) + ",\"error\":" + json::quote(p.error) + "}";
+}
+
+bool voiceModelBusy() {
+  const auto st = voicemodel::progress().state;
+  return st == "downloading" || st == "verifying" || st == "extracting";
+}
+
 std::string voicesJson() {
   std::string out = "[";
   for (const auto& v : narrator::installedVoices()) out += (out.size() > 1 ? "," : "") + json::quote(v);
@@ -426,21 +438,25 @@ void speak(Socket s, const Request& req) {
  * holds a request open the whole time, so Otzaria counts it as busy and does
  * not shut its background engine down; polling left gaps where it did.
  */
-void speakWait(Socket s) {
+void streamWhile(Socket s, const std::function<std::string()>& status, const std::function<bool()>& busy) {
   if (!sendAll(s,
                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\n"
                "Transfer-Encoding: chunked\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"))
     return;
   const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(100);
   while (true) {
-    const std::string data = speakStatus() + "\n";
+    const std::string data = status() + "\n";
     char size[16];
     snprintf(size, sizeof size, "%zx\r\n", data.size());
     if (!sendAll(s, std::string(size) + data + "\r\n")) return;
-    if (speech::status().state != "working" || std::chrono::steady_clock::now() >= until) break;
-    for (int i = 0; i < 10 && speech::status().state == "working"; i++) platform::sleepMs(100);
+    if (!busy() || std::chrono::steady_clock::now() >= until) break;
+    for (int i = 0; i < 10 && busy(); i++) platform::sleepMs(100);
   }
   sendAll(s, "0\r\n\r\n");
+}
+
+void speakWait(Socket s) {
+  streamWhile(s, speakStatus, [] { return speech::status().state == "working"; });
 }
 
 /** POST /speak-result: the finished MP3 as base64 lines, then {"type":"end"}. */
@@ -523,7 +539,9 @@ void handle(Socket s) {
                   ",\"loaded\":" + (loaded ? "true" : "false") +
                   ",\"busy\":" + (active ? "true" : "false") +
                   ",\"speak\":" + (speech::supported() ? "true" : "false") + ",\"voiceModel\":" +
-                  (narrator::modelReady() ? "true" : "false") + ",\"voices\":" + voicesJson() + "}");
+                  (narrator::modelReady() ? "true" : "false") + ",\"voiceModelSize\":" +
+                  std::to_string(voicemodel::kRelease.size) + ",\"voiceModelJob\":" + voiceModelJob() +
+                  ",\"voices\":" + voicesJson() + "}");
     } else if (req.method == "POST" && req.path == "/dictate") {
       if (packBusy())
         respond(s, 503, errorBody("pack_installing", "the voice pack is being installed"));
@@ -554,6 +572,24 @@ void handle(Socket s) {
       respond(s, 200, speakStatus());
     } else if (req.method == "POST" && req.path == "/speak-wait") {
       speakWait(s);
+    } else if (req.method == "POST" && req.path == "/install-voice-model") {
+      // Nothing holds the model's files open between jobs; a running job is
+      // cancelled so that the swap finds them closed.
+      voicemodel::startInstall([] { speech::cancel(); });
+      respond(s, 200, "{\"started\":true,\"voiceModelJob\":" + voiceModelJob() + "}");
+    } else if (req.method == "POST" && req.path == "/remove-voice-model") {
+      // Frees the model pack's space from inside Otzaria (the plugin's menu).
+      if (voiceModelBusy() || speech::status().state == "working") {
+        respond(s, 409, errorBody("busy", "wait for the download or the reading to end"));
+      } else {
+        speech::cancel();
+        const uint64_t freed = voicemodel::removeInstalled();
+        respond(s, 200, "{\"removed\":true,\"freedBytes\":" + std::to_string(freed) + "}");
+      }
+    } else if (req.method == "POST" && req.path == "/voice-model-wait") {
+      // The download takes minutes; the plugin holds this open in 100-second
+      // stretches (see speakWait) so that Otzaria keeps it alive meanwhile.
+      streamWhile(s, voiceModelJob, voiceModelBusy);
     } else if (req.method == "POST" && req.path == "/speak-result") {
       speakResult(s);
     } else if (req.method == "POST" && req.path == "/speak-cancel") {

@@ -16,6 +16,8 @@
 #include <iostream>
 
 #include "install.h"
+#include "pack.h"
+#include "voicemodel.h"
 #include "service.h"
 
 namespace install {
@@ -174,7 +176,9 @@ int uninstall(bool quiet) {
   for (const auto& entry : fs::directory_iterator(installDir(), ec))
     if (isRuntimeLibrary(entry.path())) fs::remove(entry.path(), ec);
   fs::remove(installDir(), ec);  // only when empty
-  say(quiet, "Otzaria voice service removed. The voice pack stays in Otzaria's data folder.");
+  const uint64_t freed = pack::removeInstalled() + voicemodel::removeInstalled();
+  platform::log("uninstalled, freed " + std::to_string(freed >> 20) + " MB of packs");
+  say(quiet, "Otzaria voice service removed, with the downloaded voice packs.");
   return 0;
 }
 

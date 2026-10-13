@@ -185,4 +185,20 @@ void startInstall(std::function<void()> release) {
   std::thread(run, std::move(release)).detach();
 }
 
+uint64_t removeTree(const Path& dir) {
+  std::error_code ec;
+  uint64_t bytes = 0;
+  for (const auto& e : fs::recursive_directory_iterator(dir, ec))
+    if (e.is_regular_file(ec)) bytes += e.file_size(ec);
+  fs::remove_all(dir, ec);
+  return bytes;
+}
+
+uint64_t removeInstalled() {
+  const Path base = userDir().parent_path();
+  uint64_t bytes = removeTree(userDir());
+  for (const char* d : {"download", "pack.new", "pack.old"}) bytes += removeTree(base / d);
+  return bytes;
+}
+
 }  // namespace pack

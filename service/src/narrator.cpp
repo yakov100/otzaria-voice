@@ -183,11 +183,25 @@ bool modelReady() {
 
 std::vector<std::string> installedVoices() {
   std::vector<std::string> out;
-  std::error_code ec;
-  for (const auto& e : std::filesystem::directory_iterator(voicesDir(), ec))
-    if (e.path().extension() == ".otzvoice") out.push_back(platform::toUtf8(e.path().stem()));
+  for (const Path& dir : {voicesDir(), modelDir() / "voices"}) {
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+      if (e.path().extension() == ".otzvoice") out.push_back(platform::toUtf8(e.path().stem()));
+  }
   std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
   return out;
+}
+
+Path voicePath(const std::string& id) {
+  // A voice id is a plain file name: nothing that could leave the folders.
+  if (id.empty() || id.find_first_of("/\\:.") != std::string::npos) return {};
+  for (const Path& dir : {voicesDir(), modelDir() / "voices"}) {
+    const Path p = dir / platform::fromUtf8(id + ".otzvoice");
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) return p;
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------- pieces

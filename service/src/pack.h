@@ -45,6 +45,13 @@ struct Progress {
 
 Progress progress();
 
+// Deletes [dir] with everything in it; returns the bytes it held.
+uint64_t removeTree(const Path& dir);
+
+// Deletes the user's downloaded pack and any partial download (uninstall, or
+// freeing space). Shared, read-only copies are left alone. Returns the bytes freed.
+uint64_t removeInstalled();
+
 // Starts the download in a background thread unless one is running. Before the
 // new pack replaces the old one, [release] is called so the caller can let go of
 // files it has open (the language model is memory-mapped).
