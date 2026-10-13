@@ -40,6 +40,7 @@ using winrt::Windows::Storage::Streams::DataReader;
 constexpr size_t kPieceChars = 1200;     // one synthesis call; progress and cancel between
 constexpr UINT32 kBitrate = 64000;       // mono speech: small files, clear enough
 constexpr size_t kMaxResult = 95u << 20; // the plugin's upload limit is 100MB
+constexpr double kExampleSeconds = 5;    // of the voice's recording, for the decoder (see Voice::shortened)
 
 std::mutex mu;      // current and result
 std::mutex jobMu;   // starting and cancelling (the worker thread itself)
@@ -284,24 +285,27 @@ Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
     std::lock_guard<std::mutex> lock(mu);
     current.voice = voiceId;
   }
-  const int threads = std::max(2, std::min(8, int(std::thread::hardware_concurrency() / 2)));
-  narrator::Narrator model(ort, narrator::modelDir(), threads);
-  const narrator::Voice voice = narrator::Voice::load(voicePath);
+  // The language model and the decoder run at the same time (speakAll), so
+  // each gets part of the processor.
+  const int cores = int(std::max(4u, std::thread::hardware_concurrency()));
+  const int lmThreads = std::max(2, std::min(6, cores * 3 / 8));
+  const int decoderThreads = std::max(2, std::min(6, cores * 3 / 8));
+  narrator::Narrator model(ort, narrator::modelDir(), lmThreads, decoderThreads);
+  const narrator::Voice voice = narrator::Voice::load(voicePath).shortened(kExampleSeconds);
   Pcm pcm;
   pcm.rate = narrator::kSampleRate;
-  const std::string utf8 = narrow(text);
+  const auto pieces = narrator::pieces(narrow(text));
   uint64_t done = 0;
-  for (const auto& piece : narrator::pieces(utf8)) {
-    if (cancelFlag) throw std::runtime_error("cancelled");
-    const auto audio = model.speak(model.vocalize(piece), voice, [] { return bool(cancelFlag); });
-    if (cancelFlag) throw std::runtime_error("cancelled");
+  const bool finished = model.speakAll(pieces, voice, [] { return bool(cancelFlag); },
+                                       [&](size_t i, std::vector<float> audio) {
     for (float x : audio) pcm.samples.push_back(int16_t(std::lround(std::clamp(x, -1.0f, 1.0f) * 32767)));
     pcm.samples.insert(pcm.samples.end(), narrator::kSampleRate / 6, int16_t(0));  // a breath between sentences
-    done += widen(piece).size();
+    done += widen(pieces[i]).size();
     std::lock_guard<std::mutex> lock(mu);
     current.doneChars = std::min<uint64_t>(done, current.totalChars);
     current.seconds = double(pcm.samples.size()) / pcm.rate;
-  }
+  });
+  if (!finished || cancelFlag) throw std::runtime_error("cancelled");
   return pcm;
 }
 

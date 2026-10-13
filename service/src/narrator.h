@@ -42,6 +42,12 @@ struct Voice {
 
   // "OTZVOICE" file: version, then named arrays. Throws on a bad file.
   static Voice load(const platform::Path& path);
+
+  // The same voice with only the last [seconds] of the recording as the
+  // decoder's example. The decoder works on the example and the new speech
+  // together, so a shorter example is faster; the language model's
+  // conditioning (condEmb) is kept whole.
+  Voice shortened(double seconds) const;
 };
 
 // Where the models and the voices live: <Otzaria data>/tts/pack and
@@ -59,7 +65,10 @@ std::vector<std::string> pieces(const std::string& text);
 class Narrator {
  public:
   // Loads every model (about 1.1GB of memory); throws std::runtime_error.
-  Narrator(const platform::Path& ortLibrary, const platform::Path& modelDir, int threads);
+  // The language model and the decoder get their own thread counts, since
+  // speakAll runs them at the same time.
+  Narrator(const platform::Path& ortLibrary, const platform::Path& modelDir, int lmThreads,
+           int decoderThreads);
   ~Narrator();
   Narrator(const Narrator&) = delete;
   Narrator& operator=(const Narrator&) = delete;
@@ -72,6 +81,18 @@ class Narrator {
   // is empty.
   std::vector<float> speak(const std::string& vocalized, const Voice& voice,
                            const std::function<bool()>& cancelled);
+
+  // The two halves of speak: speech tokens for a piece, then its audio.
+  std::vector<int64_t> generate(const std::string& vocalized, const Voice& voice,
+                                const std::function<bool()>& cancelled);
+  std::vector<float> decode(const std::vector<int64_t>& tokens, const Voice& voice);
+
+  // Speaks every piece in order, generating the next piece's tokens while a
+  // second thread decodes the previous one. [onAudio] receives each piece's
+  // samples in order (from the decoding thread). Returns false if cancelled.
+  bool speakAll(const std::vector<std::string>& pieces, const Voice& voice,
+                const std::function<bool()>& cancelled,
+                const std::function<void(size_t piece, std::vector<float> audio)>& onAudio);
 
   // Exposed for tests: the token ids the models receive.
   std::vector<int64_t> textTokens(const std::string& vocalized) const;

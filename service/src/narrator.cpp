@@ -1,7 +1,12 @@
 #include "narrator.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <exception>
+#include <mutex>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -20,7 +25,7 @@ using platform::Path;
 
 // ---------------------------------------------------------------- text helpers
 
-std::u32string decode(const std::string& s) {
+std::u32string toU32(const std::string& s) {
   std::u32string out;
   for (size_t i = 0; i < s.size();) {
     const unsigned char c = static_cast<unsigned char>(s[i]);
@@ -92,7 +97,10 @@ constexpr int64_t kStop = 0, kUnk = 1, kSpace = 2, kStart = 255, kHebrew = 2110;
 constexpr int64_t kStartSpeech = 6561, kStopSpeech = 6562, kExaggeration = 6563;
 constexpr int kLayers = 30, kKvHeads = 16, kHeadDim = 64, kHidden = 1024;
 constexpr int kMaxSpeechTokens = 1000;  // 40 seconds; a piece is far shorter
-constexpr float kRepetitionPenalty = 1.2f;
+// The ONNX export's example uses 1.2; with greedy choice that sometimes locks
+// into silence after the first words (one sentence of six in a Mishnah test).
+// 2.0, the original Chatterbox Multilingual setting, read all six through.
+constexpr float kRepetitionPenalty = 2.0f;
 constexpr float kExaggerationValue = 0.5f;
 
 }  // namespace
@@ -143,6 +151,18 @@ Voice Voice::load(const Path& path) {
   return v;
 }
 
+Voice Voice::shortened(double seconds) const {
+  Voice v(*this);
+  const int64_t tokens = std::max<int64_t>(1, int64_t(seconds * 25));
+  if (int64_t(v.promptTokens.size()) > tokens) {
+    v.promptTokens.erase(v.promptTokens.begin(), v.promptTokens.end() - tokens);
+    const int64_t frames = std::min<int64_t>(v.promptFrames, 2 * tokens);  // 50 mel frames a second
+    v.promptFeat.erase(v.promptFeat.begin(), v.promptFeat.end() - frames * 80);
+    v.promptFrames = frames;
+  }
+  return v;
+}
+
 // ---------------------------------------------------------------- folders
 
 Path modelDir() {
@@ -174,7 +194,7 @@ std::vector<std::string> installedVoices() {
 
 std::vector<std::string> pieces(const std::string& text) {
   constexpr size_t kTarget = 160;  // letters, not counting nikud
-  const std::u32string s = decode(text);
+  const std::u32string s = toU32(text);
   std::vector<std::string> out;
   std::u32string cur;
   size_t letters = 0;
@@ -332,7 +352,7 @@ struct Narrator::Impl {
   }
 };
 
-Narrator::Narrator(const Path& ortLibrary, const Path& modelDir, int threads)
+Narrator::Narrator(const Path& ortLibrary, const Path& modelDir, int lmThreads, int decoderThreads)
     : impl_(std::make_unique<Impl>()) {
   auto& o = *impl_;
   o.dll = std::make_unique<platform::DynamicLibrary>(ortLibrary);
@@ -348,27 +368,27 @@ Narrator::Narrator(const Path& ortLibrary, const Path& modelDir, int threads)
   // Vocabularies.
   {
     const auto doc = json::parse(readFile(modelDir / "nakdan_tokenizer.json"));
-    for (const auto& [k, v] : doc["model"]["vocab"].o) o.nakdanVocab[decode(k)] = int64_t(v.num());
+    for (const auto& [k, v] : doc["model"]["vocab"].o) o.nakdanVocab[toU32(k)] = int64_t(v.num());
     o.nakdanCls = o.nakdanVocab.at(U"[CLS]");
     o.nakdanSep = o.nakdanVocab.at(U"[SEP]");
     o.nakdanUnk = o.nakdanVocab.at(U"[UNK]");
   }
   {
     const auto doc = json::parse(readFile(modelDir / "text_tokenizer.json"));
-    for (const auto& [k, v] : doc["model"]["vocab"].o) o.textVocab[decode(k)] = int64_t(v.num());
+    for (const auto& [k, v] : doc["model"]["vocab"].o) o.textVocab[toU32(k)] = int64_t(v.num());
     int rank = 0;
     for (const auto& m : doc["model"]["merges"].arr()) {
-      const std::u32string pair = decode(m.str());
+      const std::u32string pair = toU32(m.str());
       const auto sp = pair.find(U' ');
       if (sp != std::u32string::npos) o.merges[{pair.substr(0, sp), pair.substr(sp + 1)}] = rank;
       rank++;
     }
   }
 
-  o.nakdan = o.open(modelDir / "nakdan.onnx", threads);
-  o.embed = o.open(modelDir / "embed_tokens.onnx", threads);
-  o.lm = o.open(modelDir / "language_model.onnx", threads);
-  o.decoder = o.open(modelDir / "decoder.onnx", threads);
+  o.nakdan = o.open(modelDir / "nakdan.onnx", lmThreads);
+  o.embed = o.open(modelDir / "embed_tokens.onnx", lmThreads);
+  o.lm = o.open(modelDir / "language_model.onnx", lmThreads);
+  o.decoder = o.open(modelDir / "decoder.onnx", decoderThreads);
   o.lmInputNames = o.names(o.lm, true);
   o.lmOutputNames = o.names(o.lm, false);
   if (o.lmInputNames.size() != 2 + 2 * kLayers || o.lmOutputNames.size() != 1 + 2 * kLayers)
@@ -399,7 +419,7 @@ std::vector<int64_t> Narrator::textTokens(const std::string& vocalized) const {
   // between lower-case Latin letters (applied here by rank, as BPE does).
   const auto& o = *impl_;
   std::vector<int64_t> ids{kExaggeration, kStart, kHebrew};
-  const std::u32string s = decode(vocalized);
+  const std::u32string s = toU32(vocalized);
   auto lookup = [&](const std::u32string& t) {
     auto it = o.textVocab.find(t);
     return it == o.textVocab.end() ? kUnk : it->second;
@@ -441,7 +461,7 @@ std::vector<int64_t> Narrator::textTokens(const std::string& vocalized) const {
 // ---------------------------------------------------------------- nikud
 
 std::string Narrator::vocalize(const std::string& text) {
-  std::u32string s = decode(text);
+  std::u32string s = toU32(text);
   if (std::any_of(s.begin(), s.end(), isNikud)) return text;
   // The model sees the letters only.
   std::u32string plain;
@@ -488,6 +508,65 @@ std::string Narrator::vocalize(const std::string& text) {
 
 std::vector<float> Narrator::speak(const std::string& vocalized, const Voice& voice,
                                    const std::function<bool()>& cancelled) {
+  auto tokens = generate(vocalized, voice, cancelled);
+  if (cancelled()) return {};
+  return decode(tokens, voice);
+}
+
+bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voice,
+                        const std::function<bool()>& cancelled,
+                        const std::function<void(size_t, std::vector<float>)>& onAudio) {
+  std::mutex mu;
+  std::condition_variable cv;
+  std::deque<std::pair<size_t, std::vector<int64_t>>> queue;
+  bool finished = false;
+  std::exception_ptr failure;
+  std::thread decoderThread([&] {
+    try {
+      while (true) {
+        std::pair<size_t, std::vector<int64_t>> job;
+        {
+          std::unique_lock<std::mutex> lock(mu);
+          cv.wait(lock, [&] { return !queue.empty() || finished; });
+          if (queue.empty()) return;
+          job = std::move(queue.front());
+          queue.pop_front();
+        }
+        cv.notify_all();
+        if (cancelled()) continue;
+        onAudio(job.first, decode(job.second, voice));
+      }
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(mu);
+      failure = std::current_exception();
+    }
+  });
+  try {
+    for (size_t i = 0; i < pieces.size() && !cancelled(); i++) {
+      auto tokens = generate(vocalize(pieces[i]), voice, cancelled);
+      std::unique_lock<std::mutex> lock(mu);
+      if (failure) break;
+      // At most one piece waits: the generator stays a piece ahead, no more.
+      cv.wait(lock, [&] { return queue.empty() || failure; });
+      queue.emplace_back(i, std::move(tokens));
+      cv.notify_all();
+    }
+  } catch (...) {
+    std::lock_guard<std::mutex> lock(mu);
+    if (!failure) failure = std::current_exception();
+  }
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    finished = true;
+  }
+  cv.notify_all();
+  decoderThread.join();
+  if (failure) std::rethrow_exception(failure);
+  return !cancelled();
+}
+
+std::vector<int64_t> Narrator::generate(const std::string& vocalized, const Voice& voice,
+                                        const std::function<bool()>& cancelled) {
   auto& o = *impl_;
   std::vector<int64_t> ids = textTokens(vocalized);
   const int64_t textLen = int64_t(ids.size());
@@ -537,7 +616,15 @@ std::vector<float> Narrator::speak(const std::string& vocalized, const Voice& vo
   std::vector<int64_t> generated{kStartSpeech};
   bool stopped = false;
 
-  for (int i = 0; i < kMaxSpeechTokens; i++) {
+  // A sentence is read at roughly 12 letters a second; text the model does
+  // not understand can make it talk on past the sentence, so stop at about
+  // twice the expected length (25 tokens a second).
+  int letters = 0;
+  for (char32_t c : toU32(vocalized))
+    if (!isNikud(c) && !isSpace(c) && !(c >= 0x0591 && c <= 0x05AF)) letters++;
+  const int maxTokens = std::min(kMaxSpeechTokens, 75 + letters * 4);
+
+  for (int i = 0; i < maxTokens; i++) {
     if (cancelled()) return {};
     const int64_t inLen = int64_t(inputs.size() / kHidden);
     std::vector<OrtValue*> in;
@@ -577,15 +664,29 @@ std::vector<float> Narrator::speak(const std::string& vocalized, const Voice& vo
       stopped = true;
       break;
     }
+    // Stuck on one token (silence, as a rule) for two seconds: the sentence
+    // is over or lost; drop the run and end here.
+    constexpr size_t kMaxRun = 50;
+    if (generated.size() > kMaxRun &&
+        std::all_of(generated.end() - kMaxRun, generated.end(), [&](int64_t t) { return t == next; })) {
+      generated.erase(generated.end() - kMaxRun, generated.end());
+      break;
+    }
     std::vector<int64_t> nextIds{next}, nextPos{int64_t(i) + 1};
     const float* e = embedTokens(nextIds, nextPos);
     inputs.assign(e, e + kHidden);
     mask.push_back(1);
   }
 
-  // Speech tokens: the recording's, then the new ones (without start/stop).
+  // The new speech tokens, without start and stop.
+  return std::vector<int64_t>(generated.begin() + 1, generated.end() - (stopped ? 1 : 0));
+}
+
+std::vector<float> Narrator::decode(const std::vector<int64_t>& tokens, const Voice& voice) {
+  auto& o = *impl_;
+  // The recording's tokens first: the decoder continues its voice.
   std::vector<int64_t> speech(voice.promptTokens);
-  speech.insert(speech.end(), generated.begin() + 1, generated.end() - (stopped ? 1 : 0));
+  speech.insert(speech.end(), tokens.begin(), tokens.end());
   std::vector<float> xVector(voice.xVector), feat(voice.promptFeat);
   std::vector<OrtValue*> in{
       o.tensor(speech.data(), speech.size(), {1, int64_t(speech.size())}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),

@@ -414,6 +414,29 @@ void speak(Socket s, const Request& req) {
   respond(s, 200, speakStatus());
 }
 
+/**
+ * POST /speak-wait: the job's status once a second until it ends, or for at
+ * most 100 seconds (fetchStream's limit is 120). A plugin waiting this way
+ * holds a request open the whole time, so Otzaria counts it as busy and does
+ * not shut its background engine down; polling left gaps where it did.
+ */
+void speakWait(Socket s) {
+  if (!sendAll(s,
+               "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\n"
+               "Transfer-Encoding: chunked\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"))
+    return;
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(100);
+  while (true) {
+    const std::string data = speakStatus() + "\n";
+    char size[16];
+    snprintf(size, sizeof size, "%zx\r\n", data.size());
+    if (!sendAll(s, std::string(size) + data + "\r\n")) return;
+    if (speech::status().state != "working" || std::chrono::steady_clock::now() >= until) break;
+    for (int i = 0; i < 10 && speech::status().state == "working"; i++) platform::sleepMs(100);
+  }
+  sendAll(s, "0\r\n\r\n");
+}
+
 /** POST /speak-result: the finished MP3 as base64 lines, then {"type":"end"}. */
 void speakResult(Socket s) {
   const std::string mp3 = speech::takeResult();
@@ -523,6 +546,8 @@ void handle(Socket s) {
       speak(s, req);
     } else if (req.method == "GET" && req.path == "/speak-status") {
       respond(s, 200, speakStatus());
+    } else if (req.method == "POST" && req.path == "/speak-wait") {
+      speakWait(s);
     } else if (req.method == "POST" && req.path == "/speak-result") {
       speakResult(s);
     } else if (req.method == "POST" && req.path == "/speak-cancel") {
@@ -791,10 +816,20 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
                 const platform::Path& outDir) {
   const auto ort = platform::findOnnxRuntime();
   if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
-  const int threads = std::max(2, std::min(8, int(std::thread::hardware_concurrency() / 2)));
+  auto envInt = [](const char* name, int fallback) {
+    const auto v = platform::env(name);
+    return v.empty() ? fallback : atoi(v.c_str());
+  };
+  // Evaluation only: OTZARIA_NARRATOR_LM_THREADS, _DECODER_THREADS,
+  // _PROMPT_SECONDS (0 = the whole example) and _PIPELINE=1.
+  const int lmThreads = envInt("OTZARIA_NARRATOR_LM_THREADS", 6);
+  const int decoderThreads = envInt("OTZARIA_NARRATOR_DECODER_THREADS", 6);
+  const int promptSeconds = envInt("OTZARIA_NARRATOR_PROMPT_SECONDS", 0);
+  const bool pipeline = envInt("OTZARIA_NARRATOR_PIPELINE", 0) != 0;
   auto t0 = std::chrono::steady_clock::now();
-  narrator::Narrator n(ort, models, threads);
-  const auto voice = narrator::Voice::load(voicePath);
+  narrator::Narrator n(ort, models, lmThreads, decoderThreads);
+  auto voice = narrator::Voice::load(voicePath);
+  if (promptSeconds > 0) voice = voice.shortened(promptSeconds);
   auto ms = [](auto a, auto b) {
     return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
   };
@@ -815,6 +850,22 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
     if (util::trim(line).empty()) continue;
     lineNo++;
     std::vector<float> all;
+    if (pipeline) {
+      const auto pieces = narrator::pieces(line);
+      const auto t1 = std::chrono::steady_clock::now();
+      n.speakAll(pieces, voice, [] { return false; }, [&](size_t, std::vector<float> pcm) {
+        all.insert(all.end(), pcm.begin(), pcm.end());
+        all.insert(all.end(), narrator::kSampleRate / 6, 0.0f);
+      });
+      const auto t2 = std::chrono::steady_clock::now();
+      fprintf(report, "{\"line\":%d,\"pipeline\":true,\"seconds\":%.2f,\"ms\":%lld}\n", lineNo,
+              double(all.size()) / narrator::kSampleRate, ms(t1, t2));
+      fflush(report);
+      char name[32];
+      snprintf(name, sizeof name, "%02d.wav", lineNo);
+      writeWav16(outDir / name, all, narrator::kSampleRate);
+      continue;
+    }
     for (const auto& piece : narrator::pieces(line)) {
       const auto t1 = std::chrono::steady_clock::now();
       const std::string vocalized = n.vocalize(piece);
