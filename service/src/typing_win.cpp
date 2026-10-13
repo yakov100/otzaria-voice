@@ -99,7 +99,7 @@ bool readUserHotkey() {
   std::string line;
   if (!f || !std::getline(f, line)) return false;
   if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3);  // UTF-8 BOM
-  if (!line.empty() && line.back() == '') line.pop_back();
+  if (!line.empty() && line.back() == '\r') line.pop_back();
   return parseHotkey(line);
 }
 
