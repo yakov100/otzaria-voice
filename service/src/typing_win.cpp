@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -26,9 +27,15 @@ namespace service {
 namespace {
 
 constexpr int kHotkeyId = 1;
+constexpr int kPauseId = 2;
+std::atomic<bool> pauseToggle{false};  // set by the pause key, read by the typing thread
 const wchar_t* kTitleBadge = L"Otzaria Voice";
 constexpr UINT kMsgShow = WM_APP + 1;  // lParam: new std::wstring*
 constexpr UINT kMsgHide = WM_APP + 2;
+// The pause key (second line of hotkey.txt, default Ctrl+Alt+P).
+UINT pauseMods = MOD_CONTROL | MOD_ALT, pauseVk = 'P';
+std::string pauseName = "Ctrl+Alt+P";
+std::wstring pauseLabel = L"Ctrl+Alt+P";
 constexpr auto kMaxTyping = std::chrono::minutes(10);
 HWND uiWindow = nullptr;  // hidden; owns the hotkey
 HWND badge = nullptr;     // the small "listening" sign
@@ -48,7 +55,8 @@ const Hotkey kHotkeys[] = {
 };
 std::atomic<const Hotkey*> hotkey{nullptr};
 
-// A combination the user chose, one line in %APPDATA%\otzaria\stt\hotkey.txt
+// A combination the user chose, one line in %APPDATA%\otzaria\stt\hotkey.txt (an
+// optional second line chooses the pause key, default Ctrl+Alt+P)
 // (for example "Ctrl+Shift+Space": Ctrl, Alt, Shift, Win, plus Space, a letter,
 // a digit or F1..F24), is tried before the built-in ones. When it is taken by
 // another program, the built-in list is used and the log says so.
@@ -56,7 +64,7 @@ std::string userName;
 std::wstring userLabel;
 Hotkey userHotkey{0, 0, "", L""};
 
-bool parseHotkey(const std::string& text) {
+bool parseCombo(const std::string& text, UINT& outMods, UINT& outVk, std::string& outName) {
   UINT mods = 0, vk = 0;
   std::string name;
   size_t start = 0;
@@ -86,6 +94,16 @@ bool parseHotkey(const std::string& text) {
     start = end + 1;
   }
   if (!mods || !vk) return false;
+  outMods = mods;
+  outVk = vk;
+  outName = name;
+  return true;
+}
+
+bool parseHotkey(const std::string& text) {
+  UINT mods, vk;
+  std::string name;
+  if (!parseCombo(text, mods, vk, name)) return false;
   userName = name;
   userLabel = std::wstring(name.begin(), name.end());
   userHotkey = Hotkey{mods, vk, userName.c_str(), userLabel.c_str()};
@@ -100,7 +118,20 @@ bool readUserHotkey() {
   if (!f || !std::getline(f, line)) return false;
   if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3);  // UTF-8 BOM
   if (!line.empty() && line.back() == '\r') line.pop_back();
-  return parseHotkey(line);
+  const bool ok = parseHotkey(line);
+  std::string second;  // optional: the pause key
+  if (std::getline(f, second)) {
+    if (!second.empty() && second.back() == '\r') second.pop_back();
+    UINT m, v;
+    std::string n;
+    if (parseCombo(second, m, v, n)) {
+      pauseMods = m;
+      pauseVk = v;
+      pauseName = n;
+      pauseLabel = std::wstring(n.begin(), n.end());
+    }
+  }
+  return ok;
 }
 
 void showBadge(const std::wstring& text) {
@@ -127,8 +158,20 @@ void sendKeys(std::vector<INPUT>& in) {
   in.clear();
 }
 
+// OTZARIA_VOICE_TYPING_LOG=<file> (tests only): the typing calls are written to that file
+// instead of being sent as keys, and the foreground-window checks are skipped.
+const std::string& typingLog() {
+  static const std::string path = platform::env("OTZARIA_VOICE_TYPING_LOG");
+  return path;
+}
+
 // Deletes [remove] characters before the cursor and types [text].
 void typeEdit(size_t remove, const std::wstring& text) {
+  if (!typingLog().empty()) {
+    std::ofstream log(typingLog(), std::ios::app | std::ios::binary);
+    log << "BS " << remove << " | " << util::narrow(text) << "\n";
+    return;
+  }
   waitForModifiers();
   std::vector<INPUT> in;
   for (size_t i = 0; i < remove; i++) {
@@ -149,6 +192,24 @@ void typeEdit(size_t remove, const std::wstring& text) {
   sendKeys(in);
 }
 
+// Text said while paused that cannot be typed because the session ended: it goes to the
+// clipboard, not into whatever window happens to be in front.
+void copyToClipboard(const std::wstring& text) {
+  if (!OpenClipboard(nullptr)) return;
+  EmptyClipboard();
+  const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+  if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+    if (void* mem = GlobalLock(g)) {
+      memcpy(mem, text.c_str(), bytes);
+      GlobalUnlock(g);
+      if (!SetClipboardData(CF_UNICODETEXT, g)) GlobalFree(g);
+    } else {
+      GlobalFree(g);
+    }
+  }
+  CloseClipboard();
+}
+
 void typingSession() {
   if (active) return;  // a plugin is dictating
   std::lock_guard<std::mutex> session(sessionMu);
@@ -156,6 +217,7 @@ void typingSession() {
   typingActive = true;
   stopRequested = false;
   cancelRequested = false;
+  pauseToggle = false;
   struct Done {
     ~Done() {
       active = false;
@@ -164,7 +226,7 @@ void typingSession() {
     }
   } done;
 
-  const HWND target = GetForegroundWindow();
+  HWND target = GetForegroundWindow();
   if (!pack::ready()) {
     showBadge(L"חבילת הדיבור לא מותקנת — התקינו אותה מהתוסף «חיפוש בדיבור»");  // חבילת הדיבור לא מותקנת — התקינו אותה מהתוסף «חיפוש בדיבור»
     Sleep(4000);
@@ -182,44 +244,100 @@ void typingSession() {
   const Hotkey* hk = hotkey.load();
   const std::wstring listening = L"מקשיב — דברו. " +
                                  std::wstring(hk ? hk->label : L"") +
-                                 L" לסיום";  // מקשיב — דברו. <צירוף> לסיום
+                                 L" לסיום · " + pauseLabel + L" להשהיה";  // מקשיב — דברו. <צירוף> לסיום
   showBadge(L"טוען… אפשר כבר לדבר");  // טוען… אפשר כבר לדבר
 
   std::map<int, std::string> segments;
   std::wstring typed;
   bool moved = false;
-  auto sink = [&](const std::vector<voice::LiveUpdate>& ups) {
-    if (ups.empty() || moved) return;
-    for (auto& u : ups) segments[u.segment] = u.text;
+  // Pause: speech keeps being recognized but nothing is typed, so the user can go to
+  // another page, read from it aloud and come back. [base] is the last segment already
+  // typed; what is said while paused is typed in one go on resume (at the cursor of the
+  // window the user comes back to). A sentence in progress is finished first.
+  bool paused = false, pausePending = false, typedBefore = false, open = false;
+  int base = 0, lastSegment = 0;
+  const std::wstring pausedMsg =
+      L"מושהה — הטקסט נשמר. חזרו למסמך ו-" + pauseLabel + L" להמשך";
+  auto wanted = [&] {
     std::string all;
     for (auto& [k, t] : segments)
-      if (!t.empty()) all += (all.empty() ? "" : " ") + t;
-    const std::wstring want = util::widen(all);
+      if (k > base && !t.empty()) all += (all.empty() ? "" : " ") + t;
+    return util::widen(all);
+  };
+  auto enterPause = [&] {
+    paused = true;
+    pausePending = false;
+    base = lastSegment;
+    if (!typed.empty()) typedBefore = true;
+    typed.clear();
+    showBadge(pausedMsg);
+  };
+  auto resume = [&] {
+    paused = false;
+    target = GetForegroundWindow();
+    const std::wstring want = wanted();
+    if (!want.empty()) {
+      typeEdit(0, typedBefore ? L" " + want : want);
+      typed = want;
+      typedBefore = true;
+    }
+    showBadge(listening);
+  };
+  auto sink = [&](const std::vector<voice::LiveUpdate>& ups) {
+    if (ups.empty() || moved) return;
+    for (auto& u : ups) {
+      segments[u.segment] = u.text;
+      lastSegment = std::max(lastSegment, u.segment);
+      open = !u.isFinal;
+    }
+    if (paused) return;
+    const std::wstring want = wanted();
     size_t common = 0;
     while (common < want.size() && common < typed.size() && want[common] == typed[common]) common++;
-    if (common == want.size() && common == typed.size()) return;
-    // Text goes only where dictation began: another window must not receive
-    // backspaces meant for this one.
-    if (GetForegroundWindow() != target) {
-      moved = true;
-      return;
+    if (!(common == want.size() && common == typed.size())) {
+      // Text goes only where dictation began: another window must not receive
+      // backspaces meant for this one.
+      if (typingLog().empty() && GetForegroundWindow() != target) {
+        moved = true;
+        return;
+      }
+      typeEdit(typed.size() - common, want.substr(common));
+      typed = want;
     }
-    typeEdit(typed.size() - common, want.substr(common));
-    typed = want;
+    if (pausePending && !open) enterPause();
+  };
+  auto alive = [&] {
+    if (pauseToggle.exchange(false)) {
+      if (paused) {
+        resume();
+      } else if (pausePending) {
+        pausePending = false;
+        showBadge(listening);
+      } else if (open) {
+        pausePending = true;
+        showBadge(L"משלים את המשפט, ואז מושהה…");  // משלים את המשפט, ואז מושהה…
+      } else {
+        enterPause();
+      }
+    }
+    return !moved;
   };
   std::string reason;
   try {
-    reason = recognizeLive(
-        mic, {}, {}, sink, [&] { return !moved; }, [&] { showBadge(listening); }, kMaxTyping);
+    reason = recognizeLive(mic, {}, {}, sink, alive, [&] { showBadge(listening); }, kMaxTyping);
   } catch (const std::exception& ex) {
     platform::log(std::string("typing error: ") + ex.what());
     reason = "error";
   }
   mic.close();
-  if (moved) {
+  if (paused && !wanted().empty()) {
+    copyToClipboard(wanted());
+    showBadge(L"הטקסט שנאמר בהשהיה הועתק ללוח — Ctrl+V להדבקה");  // ... הועתק ללוח — Ctrl+V להדבקה
+    Sleep(5000);
+  } else if (moved) {
     showBadge(L"ההקלטה נעצרה: עברתם לחלון אחר");  // ההקלטה נעצרה: עברתם לחלון אחר
     Sleep(2500);
-  } else if (!typed.empty() && GetForegroundWindow() == target) {
+  } else if (!typed.empty() && (!typingLog().empty() || GetForegroundWindow() == target)) {
     typeEdit(0, L" ");  // like typing: the next word does not stick to this one
   }
   hideBadge();
@@ -238,6 +356,7 @@ LRESULT CALLBACK uiProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
   switch (msg) {
     case WM_HOTKEY:
       if (w == kHotkeyId) toggleTyping();
+      if (w == kPauseId && typingActive) pauseToggle = true;
       return 0;
     case kMsgShow: {
       std::unique_ptr<std::wstring> text(reinterpret_cast<std::wstring*>(l));
@@ -247,7 +366,7 @@ LRESULT CALLBACK uiProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
       MONITORINFO mi{sizeof mi};
       GetMonitorInfoW(mon, &mi);
       const UINT dpi = GetDpiForWindow(badge) ? GetDpiForWindow(badge) : 96;
-      const int width = MulDiv(440, dpi, 96), height = MulDiv(40, dpi, 96);
+      const int width = MulDiv(560, dpi, 96), height = MulDiv(40, dpi, 96);
       const int x = (mi.rcWork.left + mi.rcWork.right - width) / 2;
       SetWindowPos(badge, HWND_TOPMOST, x, mi.rcWork.top + MulDiv(12, dpi, 96), width, height,
                    SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -326,6 +445,11 @@ void uiLoop() {
       }
       platform::log(std::string("hotkey ") + k.name + " is taken by another program");
     }
+  }
+  if (RegisterHotKey(uiWindow, kPauseId, pauseMods | MOD_NOREPEAT, pauseVk)) {
+    platform::log("pause hotkey " + pauseName);
+  } else {
+    platform::log("pause hotkey " + pauseName + " is taken by another program");
   }
   MSG m;
   while (GetMessageW(&m, nullptr, 0, 0) > 0) {
