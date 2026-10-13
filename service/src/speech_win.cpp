@@ -309,7 +309,33 @@ Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
   return pcm;
 }
 
-void run(std::wstring text, double rate, std::string voiceId) {
+/** Writes [mp3] into [dir] as [name].mp3, or "name (2).mp3" etc. if taken. */
+std::wstring saveInto(const std::wstring& dir, std::wstring name, const std::string& mp3) {
+  std::wstring clean;
+  for (wchar_t c : name)
+    if (c >= 32 && !wcschr(L"\\/:*?\"<>|", c)) clean += c;
+  while (!clean.empty() && (clean.back() == L' ' || clean.back() == L'.')) clean.pop_back();
+  if (clean.empty()) clean = L"reading";
+  if (clean.size() > 100) clean.resize(100);
+  std::filesystem::path path;
+  for (int n = 1; n < 1000; n++) {
+    path = std::filesystem::path(dir) / (clean + (n == 1 ? L"" : L" (" + std::to_wstring(n) + L")") + L".mp3");
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) break;
+  }
+  HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot_write");
+  DWORD wrote = 0;
+  const BOOL ok = WriteFile(f, mp3.data(), DWORD(mp3.size()), &wrote, nullptr);
+  CloseHandle(f);
+  if (!ok || wrote != mp3.size()) {
+    DeleteFileW(path.c_str());
+    throw std::runtime_error("cannot_write");
+  }
+  return path.wstring();
+}
+
+void run(std::wstring text, double rate, std::string voiceId, std::wstring saveDir, std::wstring saveName) {
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
   std::string error;
   std::string mp3;
@@ -319,7 +345,13 @@ void run(std::wstring text, double rate, std::string voiceId) {
     Pcm pcm = system ? speakSystem(text, rate) : speakNeural(text, voiceId);
     if (pcm.samples.empty()) throw std::runtime_error("nothing to read");
     mp3 = encodeMp3(resampleForMp3(pcm));
-    if (mp3.size() > kMaxResult) throw std::runtime_error("too_large");
+    if (!saveDir.empty()) {
+      const std::wstring path = saveInto(saveDir, saveName, mp3);
+      std::lock_guard<std::mutex> lock(mu);
+      current.savedPath = narrow(path);
+    } else if (mp3.size() > kMaxResult) {
+      throw std::runtime_error("too_large");
+    }
   } catch (const winrt::hresult_error& e) {
     error = narrow(std::wstring(e.message()));
   } catch (const std::exception& e) {
@@ -338,7 +370,7 @@ void run(std::wstring text, double rate, std::string voiceId) {
     current.state = "done";
     current.doneChars = current.totalChars;
     current.bytes = mp3.size();
-    result = std::move(mp3);
+    if (current.savedPath.empty()) result = std::move(mp3);
   }
 }
 
@@ -353,7 +385,8 @@ void cancelLocked() {
 
 bool supported() { return true; }
 
-bool start(const std::string& text, double rate, const std::string& voice, std::string& error) {
+bool start(const std::string& text, double rate, const std::string& voice, const std::string& saveDir,
+           const std::string& saveName, std::string& error) {
   std::lock_guard<std::mutex> job(jobMu);
   cancelLocked();
   std::wstring wide = widen(text);
@@ -361,13 +394,22 @@ bool start(const std::string& text, double rate, const std::string& voice, std::
     error = "empty";
     return false;
   }
+  const std::wstring dir = widen(saveDir);
+  if (!dir.empty()) {
+    std::error_code ec;
+    const std::filesystem::path p(dir);
+    if (!p.is_absolute() || !std::filesystem::is_directory(p, ec)) {
+      error = "bad_folder";
+      return false;
+    }
+  }
   std::lock_guard<std::mutex> lock(mu);
   cancelFlag = false;
   current = Status{};
   current.state = "working";
   current.totalChars = wide.size();
   result.clear();
-  worker = std::thread(run, std::move(wide), rate, voice);
+  worker = std::thread(run, std::move(wide), rate, voice, dir, widen(saveName));
   return true;
 }
 

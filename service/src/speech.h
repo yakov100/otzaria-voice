@@ -20,6 +20,7 @@ struct Status {
   uint64_t doneChars = 0, totalChars = 0;
   double seconds = 0;          // length of the audio made so far
   uint64_t bytes = 0;          // size of the finished MP3
+  std::string savedPath;       // where it was written, when a folder was given
 };
 
 bool supported();
@@ -27,8 +28,12 @@ bool supported();
 // Starts reading [text] (UTF-8) at [rate] (1 = normal, 0.5 .. 3) in [voice]:
 // "" or "system" for the system's Hebrew voice, otherwise an installed
 // neural voice (narrator.h; the rate does not apply to it). A running job is
-// cancelled first. Returns false with [error] when it cannot start.
-bool start(const std::string& text, double rate, const std::string& voice, std::string& error);
+// cancelled first. With [saveDir] the finished file is written there as
+// [saveName].mp3 (a number is added rather than replacing a file) and not
+// kept for takeResult: the plugin need not be alive when the job ends.
+// Returns false with [error] when it cannot start.
+bool start(const std::string& text, double rate, const std::string& voice, const std::string& saveDir,
+           const std::string& saveName, std::string& error);
 
 Status status();
 

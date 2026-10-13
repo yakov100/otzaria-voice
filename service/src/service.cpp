@@ -386,28 +386,34 @@ std::string speakStatus() {
   return "{\"state\":" + json::quote(st.state) + ",\"error\":" + json::quote(st.error) +
          ",\"voice\":" + json::quote(st.voice) + ",\"done\":" + std::to_string(st.doneChars) +
          ",\"total\":" + std::to_string(st.totalChars) + ",\"seconds\":" + seconds +
-         ",\"bytes\":" + std::to_string(st.bytes) + "}";
+         ",\"bytes\":" + std::to_string(st.bytes) + ",\"savedPath\":" + json::quote(st.savedPath) + "}";
 }
 
-/** POST /speak {"text", "rate", "voice"}: starts reading into an MP3 in the background. */
+/**
+ * POST /speak {"text", "rate", "voice", "saveDir", "saveName"}: starts reading
+ * into an MP3 in the background; with saveDir the service writes the file
+ * there itself (a folder the user picked in the plugin).
+ */
 void speak(Socket s, const Request& req) {
   if (!speech::supported()) {
     respond(s, 501, errorBody("unsupported", "reading aloud to a file needs Windows"));
     return;
   }
-  std::string text, voice;
+  std::string text, voice, saveDir, saveName;
   double rate = 1.0;
   try {
     auto b = json::parse(req.body);
     text = b["text"].str();
     if (b["rate"].kind == json::Value::Number) rate = b["rate"].num();
     if (b["voice"].kind == json::Value::String) voice = b["voice"].str();
+    if (b["saveDir"].kind == json::Value::String) saveDir = b["saveDir"].str();
+    if (b["saveName"].kind == json::Value::String) saveName = b["saveName"].str();
   } catch (...) {
     respond(s, 400, errorBody("bad_request", "body must be JSON with a text"));
     return;
   }
   std::string error;
-  if (!speech::start(text, rate, voice, error)) {
+  if (!speech::start(text, rate, voice, saveDir, saveName, error)) {
     respond(s, 400, errorBody(error, "cannot start reading"));
     return;
   }
