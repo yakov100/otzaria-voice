@@ -38,7 +38,8 @@ endif()
 
 if(ANDROID)
   add_library(otzaria_voice SHARED
-    ${COMMON_SOURCES} ${AUDIO_SOURCES} ${SRC}/pack_android.cpp ${SRC}/jni.cpp)
+    ${COMMON_SOURCES} ${AUDIO_SOURCES} ${SRC}/pack_android.cpp ${SRC}/jni.cpp
+    ${SRC}/speech_none.cpp)
   target_link_libraries(otzaria_voice PRIVATE log android)
   # Small and quick to load; nothing outside the JNI entry points is exported.
   set_target_properties(otzaria_voice PROPERTIES CXX_VISIBILITY_PRESET hidden)
@@ -49,10 +50,13 @@ endif()
 if(WIN32)
   add_executable(otzaria-voice WIN32
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC}/main.cpp ${SRC}/pack_win.cpp ${SRC}/install_win.cpp ${SRC}/typing_win.cpp)
+    ${SRC}/main.cpp ${SRC}/pack_win.cpp ${SRC}/install_win.cpp ${SRC}/typing_win.cpp
+    ${SRC}/speech_win.cpp)
   target_compile_definitions(otzaria-voice PRIVATE UNICODE _UNICODE NDEBUG)
   target_link_libraries(otzaria-voice PRIVATE
-    ws2_32 winmm advapi32 shell32 user32 gdi32 winhttp bcrypt psapi)
+    ws2_32 winmm advapi32 shell32 user32 gdi32 winhttp bcrypt psapi
+    # Reading aloud to MP3 (speech_win.cpp): the system voice and the encoder.
+    windowsapp mfplat mfreadwrite mfuuid)
   if(MSVC)
     # Static runtime: one file to copy, nothing else to install.
     set_property(TARGET otzaria-voice PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
@@ -62,7 +66,7 @@ if(WIN32)
 else()
   add_executable(otzaria-voice
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC}/main.cpp ${SRC}/pack_posix.cpp ${SRC}/install_posix.cpp)
+    ${SRC}/main.cpp ${SRC}/pack_posix.cpp ${SRC}/install_posix.cpp ${SRC}/speech_none.cpp)
   find_package(Threads REQUIRED)
   target_link_libraries(otzaria-voice PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
   target_compile_options(otzaria-voice PRIVATE -O2 -Wall)

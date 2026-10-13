@@ -3,6 +3,7 @@
 // Listens on http://127.0.0.1:47811 only. A plugin starts dictation with
 // POST /dictate (network.fetchStream) and receives newline-delimited JSON while
 // the user speaks; POST /stop ends it after the last sentence is recognized.
+// POST /speak reads text aloud into an MP3 with the system voice (speech.h).
 // Idle, the service holds no model and trims its memory; the model is loaded on
 // the first dictation and released after a few idle minutes.
 #define _CRT_SECURE_NO_WARNINGS
@@ -37,6 +38,7 @@
 
 #include "json.h"
 #include "pack.h"
+#include "speech.h"
 #include "talmud_phrases.h"
 #include "util.h"
 
@@ -170,7 +172,8 @@ bool readRequest(Socket s, Request& req) {
       return false;
     }
   }
-  if (length > 65536) return false;
+  // Text to read aloud may be a whole chapter; everything else is small.
+  if (length > (req.path == "/speak" ? (4u << 20) : 65536u)) return false;
   req.body = buf.substr(end + 4);
   while (req.body.size() < length) {
     const auto n = recv(s, tmp, sizeof tmp, 0);
@@ -185,6 +188,8 @@ void respond(Socket s, int status, const std::string& body) {
   const char* reason = status == 200   ? "OK"
                        : status == 403 ? "Forbidden"
                        : status == 404 ? "Not Found"
+                       : status == 409 ? "Conflict"
+                       : status == 501 ? "Not Implemented"
                        : status == 503 ? "Service Unavailable"
                                        : "Error";
   sendAll(s, "HTTP/1.1 " + std::to_string(status) + " " + reason +
@@ -347,6 +352,84 @@ void dictate(Socket s, const Request& req) {
   if (alive) sendAll(s, "0\r\n\r\n");
 }
 
+// ---------------------------------------------------------------- reading aloud
+
+std::string base64(const char* data, size_t n) {
+  static const char* abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve((n + 2) / 3 * 4);
+  for (size_t i = 0; i < n; i += 3) {
+    const unsigned b0 = static_cast<unsigned char>(data[i]);
+    const unsigned b1 = i + 1 < n ? static_cast<unsigned char>(data[i + 1]) : 0;
+    const unsigned b2 = i + 2 < n ? static_cast<unsigned char>(data[i + 2]) : 0;
+    out += abc[b0 >> 2];
+    out += abc[((b0 & 3) << 4) | (b1 >> 4)];
+    out += i + 1 < n ? abc[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+    out += i + 2 < n ? abc[b2 & 63] : '=';
+  }
+  return out;
+}
+
+std::string speakStatus() {
+  const auto st = speech::status();
+  char seconds[32];
+  snprintf(seconds, sizeof seconds, "%.1f", st.seconds);
+  return "{\"state\":" + json::quote(st.state) + ",\"error\":" + json::quote(st.error) +
+         ",\"voice\":" + json::quote(st.voice) + ",\"done\":" + std::to_string(st.doneChars) +
+         ",\"total\":" + std::to_string(st.totalChars) + ",\"seconds\":" + seconds +
+         ",\"bytes\":" + std::to_string(st.bytes) + "}";
+}
+
+/** POST /speak {"text", "rate"}: starts reading into an MP3 in the background. */
+void speak(Socket s, const Request& req) {
+  if (!speech::supported()) {
+    respond(s, 501, errorBody("unsupported", "reading aloud to a file needs Windows"));
+    return;
+  }
+  std::string text;
+  double rate = 1.0;
+  try {
+    auto b = json::parse(req.body);
+    text = b["text"].str();
+    if (b["rate"].kind == json::Value::Number) rate = b["rate"].num();
+  } catch (...) {
+    respond(s, 400, errorBody("bad_request", "body must be JSON with a text"));
+    return;
+  }
+  std::string error;
+  if (!speech::start(text, rate, error)) {
+    respond(s, 400, errorBody(error, "cannot start reading"));
+    return;
+  }
+  respond(s, 200, speakStatus());
+}
+
+/** POST /speak-result: the finished MP3 as base64 lines, then {"type":"end"}. */
+void speakResult(Socket s) {
+  const std::string mp3 = speech::takeResult();
+  if (mp3.empty()) {
+    respond(s, 409, errorBody("not_ready", "no finished reading to take"));
+    return;
+  }
+  if (!sendAll(s,
+               "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\n"
+               "Transfer-Encoding: chunked\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"))
+    return;
+  auto line = [&](const std::string& l) {
+    const std::string data = l + "\n";
+    char size[16];
+    snprintf(size, sizeof size, "%zx\r\n", data.size());
+    return sendAll(s, std::string(size) + data + "\r\n");
+  };
+  constexpr size_t kPart = 48 * 1024;  // 64KB of base64 per line
+  for (size_t at = 0; at < mp3.size(); at += kPart)
+    if (!line("{\"type\":\"data\",\"b64\":\"" +
+              base64(mp3.data() + at, std::min(kPart, mp3.size() - at)) + "\"}"))
+      return;
+  if (line("{\"type\":\"end\",\"bytes\":" + std::to_string(mp3.size()) + "}"))
+    sendAll(s, "0\r\n\r\n");
+}
+
 // ---------------------------------------------------------------- server
 
 std::atomic<bool> quitting{false};
@@ -399,7 +482,8 @@ void handle(Socket s) {
                   ",\"runtime\":" + (runtimeFound() ? "true" : "false") +
                   ",\"microphone\":" + (microphoneAllowed ? "true" : "false") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
-                  ",\"busy\":" + (active ? "true" : "false") + "}");
+                  ",\"busy\":" + (active ? "true" : "false") +
+                  ",\"speak\":" + (speech::supported() ? "true" : "false") + "}");
     } else if (req.method == "POST" && req.path == "/dictate") {
       if (packBusy())
         respond(s, 503, errorBody("pack_installing", "the voice pack is being installed"));
@@ -424,6 +508,15 @@ void handle(Socket s) {
       const bool was = active;
       cancelRequested = true;
       respond(s, 200, std::string("{\"cancelled\":") + (was ? "true" : "false") + "}");
+    } else if (req.method == "POST" && req.path == "/speak") {
+      speak(s, req);
+    } else if (req.method == "GET" && req.path == "/speak-status") {
+      respond(s, 200, speakStatus());
+    } else if (req.method == "POST" && req.path == "/speak-result") {
+      speakResult(s);
+    } else if (req.method == "POST" && req.path == "/speak-cancel") {
+      speech::cancel();
+      respond(s, 200, speakStatus());
     } else if (req.method == "POST" && req.path == "/quit") {
       respond(s, 200, "{\"quitting\":true}");
       requestQuit();
@@ -580,6 +673,7 @@ int serve() {
 #endif
   listener = kNoSocket;
   idle.join();
+  speech::cancel();
   platform::log("service stopped");
   platform::sleepMs(300);  // let the last responses go out
 #ifdef _WIN32
