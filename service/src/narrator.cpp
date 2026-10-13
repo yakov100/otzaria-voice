@@ -193,7 +193,11 @@ std::vector<std::string> installedVoices() {
 // ---------------------------------------------------------------- pieces
 
 std::vector<std::string> pieces(const std::string& text) {
-  constexpr size_t kTarget = 160;  // letters, not counting nikud
+  // Letters per piece, not counting nikud. With 160 the model lost its way
+  // inside long unpunctuated stretches: in a Josephus passage one piece came
+  // out as unrelated words and others dropped their endings (46% of words
+  // wrong when transcribed back); halved to about 75, 16%.
+  constexpr size_t kTarget = 80;
   const std::u32string s = toU32(text);
   std::vector<std::string> out;
   std::u32string cur;
