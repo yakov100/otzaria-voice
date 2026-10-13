@@ -292,20 +292,29 @@ Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
   const int decoderThreads = std::max(2, std::min(6, cores * 3 / 8));
   narrator::Narrator model(ort, narrator::modelDir(), lmThreads, decoderThreads);
   const narrator::Voice voice = narrator::Voice::load(voicePath).shortened(kExampleSeconds);
-  Pcm pcm;
-  pcm.rate = narrator::kSampleRate;
   const auto pieces = narrator::pieces(narrow(text));
+  std::vector<float> audioAll;
   uint64_t done = 0;
   const bool finished = model.speakAll(pieces, voice, [] { return bool(cancelFlag); },
                                        [&](size_t i, std::vector<float> audio) {
-    for (float x : audio) pcm.samples.push_back(int16_t(std::lround(std::clamp(x, -1.0f, 1.0f) * 32767)));
-    pcm.samples.insert(pcm.samples.end(), narrator::kSampleRate / 6, int16_t(0));  // a breath between sentences
+    audioAll.insert(audioAll.end(), audio.begin(), audio.end());
+    audioAll.insert(audioAll.end(), narrator::kSampleRate / 6, 0.0f);  // a breath between sentences
     done += widen(pieces[i]).size();
     std::lock_guard<std::mutex> lock(mu);
     current.doneChars = std::min<uint64_t>(done, current.totalChars);
-    current.seconds = double(pcm.samples.size()) / pcm.rate;
+    current.seconds = double(audioAll.size()) / narrator::kSampleRate;
   });
   if (!finished || cancelFlag) throw std::runtime_error("cancelled");
+  // The decoder's peaks pass 1.0 (1.2 in a test), which clipped and then
+  // overshot further in the MP3. One gain for the whole file keeps the
+  // loudest peak at 0.89 and the sentences at the same level as each other.
+  float peak = 0;
+  for (float x : audioAll) peak = std::max(peak, std::fabs(x));
+  const float gain = peak > 0.89f ? 0.89f / peak : 1.0f;
+  Pcm pcm;
+  pcm.rate = narrator::kSampleRate;
+  pcm.samples.reserve(audioAll.size());
+  for (float x : audioAll) pcm.samples.push_back(int16_t(std::lround(std::clamp(x * gain, -1.0f, 1.0f) * 32767)));
   return pcm;
 }
 
