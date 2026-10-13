@@ -6,11 +6,18 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <atomic>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "pack.h"
+#include "platform.h"
 #include "service.h"
 #include "util.h"
 
@@ -40,6 +47,61 @@ const Hotkey kHotkeys[] = {
     {MOD_CONTROL | MOD_ALT, 'D', "Ctrl+Alt+D", L"Ctrl+Alt+D"},
 };
 std::atomic<const Hotkey*> hotkey{nullptr};
+
+// A combination the user chose, one line in %APPDATA%\otzaria\stt\hotkey.txt
+// (for example "Ctrl+Shift+Space": Ctrl, Alt, Shift, Win, plus Space, a letter,
+// a digit or F1..F24), is tried before the built-in ones. When it is taken by
+// another program, the built-in list is used and the log says so.
+std::string userName;
+std::wstring userLabel;
+Hotkey userHotkey{0, 0, "", L""};
+
+bool parseHotkey(const std::string& text) {
+  UINT mods = 0, vk = 0;
+  std::string name;
+  size_t start = 0;
+  for (;;) {
+    size_t end = text.find('+', start);
+    std::string tok = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    while (!tok.empty() && isspace((unsigned char)tok.back())) tok.pop_back();
+    while (!tok.empty() && isspace((unsigned char)tok.front())) tok.erase(0, 1);
+    std::string low;
+    for (char c : tok) low += (char)tolower((unsigned char)c);
+    if (low == "ctrl" || low == "control") mods |= MOD_CONTROL;
+    else if (low == "alt") mods |= MOD_ALT;
+    else if (low == "shift") mods |= MOD_SHIFT;
+    else if (low == "win") mods |= MOD_WIN;
+    else if (low == "space") vk = VK_SPACE;
+    else if (low.size() == 1 && isalnum((unsigned char)low[0])) vk = (UINT)toupper((unsigned char)low[0]);
+    else if (low.size() >= 2 && low[0] == 'f' && isdigit((unsigned char)low[1])) {
+      int n = atoi(low.c_str() + 1);
+      if (n < 1 || n > 24) return false;
+      vk = VK_F1 + n - 1;
+    } else if (!low.empty()) return false;
+    if (!tok.empty()) {
+      if (!name.empty()) name += '+';
+      name += tok;
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  if (!mods || !vk) return false;
+  userName = name;
+  userLabel = std::wstring(name.begin(), name.end());
+  userHotkey = Hotkey{mods, vk, userName.c_str(), userLabel.c_str()};
+  return true;
+}
+
+bool readUserHotkey() {
+  std::filesystem::path p =
+      platform::fromUtf8(platform::env("APPDATA")) / L"otzaria" / L"stt" / L"hotkey.txt";
+  std::ifstream f(p);
+  std::string line;
+  if (!f || !std::getline(f, line)) return false;
+  if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3);  // UTF-8 BOM
+  if (!line.empty() && line.back() == '') line.pop_back();
+  return parseHotkey(line);
+}
 
 void showBadge(const std::wstring& text) {
   if (uiWindow) PostMessageW(uiWindow, kMsgShow, 0, LPARAM(new std::wstring(text)));
@@ -246,13 +308,24 @@ void uiLoop() {
                           bc.lpszClassName, kTitleBadge, WS_POPUP, 0, 0, 10, 10, nullptr, nullptr,
                           inst, nullptr);
   SetLayeredWindowAttributes(badge, 0, 235, LWA_ALPHA);
-  for (const auto& k : kHotkeys) {
-    if (RegisterHotKey(uiWindow, kHotkeyId, k.mods | MOD_NOREPEAT, k.vk)) {
-      hotkey = &k;
-      platform::log(std::string("hotkey ") + k.name);
-      break;
+  if (readUserHotkey()) {
+    if (RegisterHotKey(uiWindow, kHotkeyId, userHotkey.mods | MOD_NOREPEAT, userHotkey.vk)) {
+      hotkey = &userHotkey;
+      platform::log(std::string("hotkey ") + userHotkey.name + " (from hotkey.txt)");
+    } else {
+      platform::log(std::string("hotkey ") + userHotkey.name +
+                    " from hotkey.txt is taken by another program");
     }
-    platform::log(std::string("hotkey ") + k.name + " is taken by another program");
+  }
+  if (!hotkey.load()) {
+    for (const auto& k : kHotkeys) {
+      if (RegisterHotKey(uiWindow, kHotkeyId, k.mods | MOD_NOREPEAT, k.vk)) {
+        hotkey = &k;
+        platform::log(std::string("hotkey ") + k.name);
+        break;
+      }
+      platform::log(std::string("hotkey ") + k.name + " is taken by another program");
+    }
   }
   MSG m;
   while (GetMessageW(&m, nullptr, 0, 0) > 0) {
