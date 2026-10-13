@@ -40,8 +40,14 @@ namespace platform {
 
 namespace fs = std::filesystem;
 
-Path fromUtf8(const std::string& s) { return fs::u8path(s); }
-std::string toUtf8(const Path& p) { return p.u8string(); }
+// Not u8path/u8string: in C++20 they moved to char8_t.
+#ifdef _WIN32
+Path fromUtf8(const std::string& s) { return Path(util::widen(s)); }
+std::string toUtf8(const Path& p) { return util::narrow(p.wstring()); }
+#else
+Path fromUtf8(const std::string& s) { return Path(s); }
+std::string toUtf8(const Path& p) { return p.string(); }
+#endif
 
 #ifdef _WIN32
 

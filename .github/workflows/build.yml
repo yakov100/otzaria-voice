@@ -150,9 +150,12 @@ jobs:
         if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS != 'true'
         run: echo "::notice::פרסום לחנות אוצריא דולג - הסודות OTZARIA_USER ו-OTZARIA_PASSWORD לא הוגדרו במאגר (Settings > Secrets and variables > Actions)."
 
+      # A store problem (login, metadata) must not hold back the GitHub
+      # Release with the installers: the step warns and the run goes on.
       - name: פרסום לחנות אוצריא (released בלבד)
         if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && env.PUBLISH != 'false'
         id: publish
+        continue-on-error: true
         uses: Otzaria/otzaria-plugin-validator@v1
         with:
           path: plugin/packages/released
@@ -203,6 +206,7 @@ jobs:
 
       - name: פרסום לחנות אוצריא
         if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && vars.PUBLISH_READ_ALOUD == 'true' && env.PUBLISH != 'false'
+        continue-on-error: true
         uses: Otzaria/otzaria-plugin-validator@v1
         with:
           path: plugin-tts

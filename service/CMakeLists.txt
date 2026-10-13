@@ -55,6 +55,9 @@ if(WIN32)
     ${SRC}/main.cpp ${SRC}/pack_win.cpp ${SRC}/install_win.cpp ${SRC}/typing_win.cpp
     ${SRC}/speech_win.cpp)
   target_compile_definitions(otzaria-voice PRIVATE UNICODE _UNICODE NDEBUG)
+  # C++/WinRT (speech_win.cpp) under C++17 includes <experimental/coroutine>,
+  # which newer MSVC refuses; with C++20 it uses <coroutine>.
+  target_compile_features(otzaria-voice PRIVATE cxx_std_20)
   target_link_libraries(otzaria-voice PRIVATE
     ws2_32 winmm advapi32 shell32 user32 gdi32 winhttp bcrypt psapi
     # Reading aloud to MP3 (speech_win.cpp): the system voice and the encoder.
