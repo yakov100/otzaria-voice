@@ -58,7 +58,6 @@ async function toggleSearchDictation() {
     }
     if (result.reason === 'time_limit') say('הדיבור הסתיים אחרי 100 שניות — מחפש: ' + result.text);
     else say('מחפש: ' + result.text);
-    hotkeyTipOnce(st);
   } finally {
     searchSession = false;
     setToolbar(TOOLBAR_IDLE);

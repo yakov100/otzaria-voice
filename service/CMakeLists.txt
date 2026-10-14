@@ -58,7 +58,7 @@ endif()
 if(WIN32)
   add_executable(otzaria-voice WIN32
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_win.cpp ${SRC_COMMON}/install_win.cpp ${SRC_DICTATION}/typing_win.cpp
+    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_win.cpp ${SRC_COMMON}/install_win.cpp
     ${SRC_TTS}/speech_win.cpp)
   target_compile_definitions(otzaria-voice PRIVATE UNICODE _UNICODE NDEBUG)
   # C++/WinRT (speech_win.cpp) under C++17 includes <experimental/coroutine>,

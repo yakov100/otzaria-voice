@@ -72,10 +72,9 @@ installed (they are on macOS and on common desktops).
 
 ## What differs per platform
 
-- **Typing into any program with a global key combination** (Ctrl+Alt+Space,
-  else Win+Alt+Space, else Ctrl+Alt+D) is Windows-only (`typing_win.cpp`);
-  elsewhere `/status` reports `"hotkey": ""`. Linux would need per-desktop
-  work (X11 vs Wayland portals), macOS Accessibility permission — not done.
+- **Typing into other programs does not exist.** The service only answers
+  Otzaria plugins on 127.0.0.1 (requests with an `Origin` header or without
+  `X-Otzaria-Voice` are refused) and registers no global key combination.
 - **Android microphone rule:** a service may record only when its foreground
   service was started while the app was on screen (Android 11+), and a
   microphone foreground service cannot start from boot (Android 14+). At boot

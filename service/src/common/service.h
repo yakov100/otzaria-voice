@@ -35,7 +35,7 @@ int evaluate(const platform::Path& manifest, const platform::Path& out);
 int narrateTest(const platform::Path& models, const platform::Path& voice, const platform::Path& text,
                 const platform::Path& outDir);
 
-// One dictation at a time: plugin (POST /dictate) or typing (Windows hotkey).
+// One dictation at a time: plugin (POST /dictate). The service never types into other programs.
 extern std::mutex sessionMu;
 extern std::atomic<bool> active;
 extern std::atomic<bool> stopRequested;
@@ -65,10 +65,5 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
                           const std::function<void(const std::vector<voice::LiveUpdate>&)>& sink,
                           const std::function<bool()>& alive, const std::function<void()>& onReady,
                           std::chrono::seconds maxDuration, AutoEnd autoEnd = {});
-
-// Typing into any focused window with a global key combination (typing_win.cpp).
-// Elsewhere these do nothing and the combination is "".
-void startTyping();
-const char* typingHotkey();
 
 }  // namespace service

@@ -123,14 +123,4 @@ async function readyToDictate() {
   return st;
 }
 
-/** Once: the service's own key combination types by voice into any field (Windows). */
-async function hotkeyTipOnce(st) {
-  if (!st || !st.hotkey) return;
-  const seen = await Otzaria.call('storage.get', { key: 'hotkeyTipShown' });
-  if (seen && seen.success && seen.data) return;
-  await Otzaria.call('storage.set', { key: 'hotkeyTipShown', value: true });
-  say(
-    'טיפ: ' + st.hotkey.replace('Space', 'רווח') +
-      ' מפעיל הקלדה בדיבור בכל שדה כתיבה במחשב — גם בשדות החיפוש של אוצריא',
-  );
-}
+

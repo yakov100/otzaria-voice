@@ -90,7 +90,6 @@ async function onFieldActionInvoked(ev) {
   await end();
   if (result.reason === 'no_speech') say('לא נשמע דיבור');
   else if (result.reason === 'time_limit') say('הדיבור הסתיים אחרי 100 שניות');
-  hotkeyTipOnce(st);
 }
 
 function onFieldActionStop(ev) {

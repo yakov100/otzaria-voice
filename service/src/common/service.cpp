@@ -537,7 +537,7 @@ void handle(Socket s) {
                   ",\"packSize\":" + std::to_string(pack::kRelease.size) +
                   ",\"packLatest\":" + std::to_string(pack::kRelease.version) +
                   ",\"packOutdated\":" + (pack::outdated() ? "true" : "false") +
-                  ",\"packJob\":" + packJob() + ",\"hotkey\":" + json::quote(typingHotkey()) +
+                  ",\"packJob\":" + packJob() +
                   ",\"runtime\":" + (runtimeFound() ? "true" : "false") +
                   ",\"microphone\":" + (microphoneAllowed ? "true" : "false") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
@@ -789,7 +789,6 @@ int serve() {
   platform::log(std::string("service ") + kVersion + " (" + kPlatform +
                 ") listening on 127.0.0.1:" + std::to_string(port()));
   std::thread idle(idleLoop);
-  startTyping();
   platform::trimMemory();
   while (!quitting) {
 #ifndef _WIN32
@@ -991,11 +990,5 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
   fclose(report);
   return 0;
 }
-
-#ifndef _WIN32
-// Typing into other programs is Windows-only for now (see docs/shared/platforms.md).
-void startTyping() {}
-const char* typingHotkey() { return ""; }
-#endif
 
 }  // namespace service
