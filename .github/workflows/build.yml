@@ -307,7 +307,9 @@ jobs:
           foreach ($f in 'ctc\model.int8.onnx', 'ctc\vocab.json', 'ctc\preprocessor.json', 'lm\library.otzlm', 'LICENSES.txt', 'version.txt') {
             if (-not (Test-Path "$pack\$f")) { Write-Error "voice pack: missing $f"; exit 1 }
           }
-          if ((Get-Content "$pack\version.txt" -Raw).Trim() -ne '3') { Write-Error 'voice pack: version.txt is not 3'; exit 1 }
+          $want = [regex]::Match((Get-Content "$env:GITHUB_WORKSPACE\service\src\pack.cpp" -Raw), 'kRelease = \{\s*(\d+),').Groups[1].Value
+          if (-not $want) { Write-Error 'voice pack: cannot read the version from pack.cpp'; exit 1 }
+          if ((Get-Content "$pack\version.txt" -Raw).Trim() -ne $want) { Write-Error "voice pack: version.txt is not $want"; exit 1 }
           Write-Host 'voice pack installed'
 
       - name: הכתבה דרך השירות המותקן
