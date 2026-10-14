@@ -109,6 +109,8 @@ async function readyToDictate() {
     sayError('שירות הדיבור לא מצא את רכיב ONNX Runtime של אוצריא; ודאו שאוצריא מותקנת כרגיל');
     return null;
   }
+  // First, so that a service about to be replaced does not download the old voice pack.
+  if (await offerServiceUpdate(st)) return null;
   if (!st.pack || PACK_BUSY.includes(st.packJob && st.packJob.state)) {
     await offerPack(st);
     return null;

@@ -5,6 +5,9 @@
 // confirmation dialog. Messages are plain text, never HTML.
 
 const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
+// The newest voice service this plugin knows of (kVersion in service/src/service.cpp). The store
+// updates the plugin but not the service, so an older one is offered the download page.
+const LATEST_SERVICE = '2.2.0';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {
@@ -169,6 +172,51 @@ async function offerPackUpdate(st) {
   try {
     await Otzaria.call('storage.set', { key, value: st.packLatest + ':' + Date.now() });
   } catch (_) {}
+  return false;
+}
+
+/** True when version [a] ("2.1.0") is older than [b]; false when either is not made of plain numbers. */
+function versionOlder(a, b) {
+  const plain = (v) => /^\d+(\.\d+){0,2}$/.test(String(v));
+  if (!plain(a) || !plain(b)) return false;
+  const x = String(a).split('.').map(Number);
+  const y = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d < 0;
+  }
+  return false;
+}
+
+const SERVICE_UPDATE_ASK_AGAIN_MS = 14 * 24 * 3600 * 1000;
+
+/**
+ * The installed voice service is older than LATEST_SERVICE. It is asked once per version and again
+ * after two weeks whether to open the download page; the old service keeps working either way.
+ * True when the page was opened, so the dictation waits for the installation.
+ */
+async function offerServiceUpdate(st) {
+  if (!st.version || !versionOlder(st.version, LATEST_SERVICE)) return false;
+  const key = 'serviceUpdateDeclined';
+  try {
+    const saved = await Otzaria.call('storage.get', { key });
+    const [version, at] = String((saved && saved.success && saved.data) || '').split(':');
+    if (version === LATEST_SERVICE && Date.now() - Number(at) < SERVICE_UPDATE_ASK_AGAIN_MS) return false;
+  } catch (_) {}
+  const ok = await ask(
+    'עדכון לשירות הדיבור',
+    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), עם מודל זיהוי חדש שמכוון להגייה ישיבתית ולארמית.\n' +
+      'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אחר כך יוצע להוריד חבילת דיבור חדשה.\n' +
+      'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
+      'לפתוח את דף ההורדה?',
+  );
+  try {
+    await Otzaria.call('storage.set', { key, value: LATEST_SERVICE + ':' + Date.now() });
+  } catch (_) {}
+  if (!ok) return false;
+  const res = await Otzaria.call('app.openUrl', { url: DOWNLOAD_PAGE });
+  if (res && res.success) return true;
+  sayError('לא ניתן לפתוח את דף ההורדה: ' + DOWNLOAD_PAGE);
   return false;
 }
 
