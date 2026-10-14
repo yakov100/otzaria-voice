@@ -6,8 +6,11 @@ name: בנייה ואריזה
 # dictation through it (installer/ci/smoke-test.sh), builds and validates the
 # plugin, and uploads everything as workflow artifacts. On pushes to main whose
 # plugin version has no GitHub Release yet, it also creates Release v<version>
-# with all files and publishes the plugin to the Otzaria store (when the store
-# secrets exist). The second plugin, "הקראה קולית" (plugin-tts/, reading aloud
+# with all files. The plugin goes to the Otzaria store only on purpose: when this
+# workflow is run by hand on main (Actions > Run workflow), or on a push when the
+# repository variable PUBLISH_DICTATION is "true"; both also need the store
+# secrets. A plain push to main builds and releases on GitHub and leaves the
+# store alone. The second plugin, "הקראה קולית" (plugin-tts/, reading aloud
 # and MP3 files through the same service), is validated and packed as well,
 # and published to the store when the repository variable
 # PUBLISH_READ_ALOUD is "true".
@@ -78,6 +81,8 @@ jobs:
     env:
       HAS_STORE_SECRETS: ${{ secrets.OTZARIA_USER != '' && secrets.OTZARIA_PASSWORD != '' }}
       PUBLISH: ${{ inputs.publish || 'auto' }}
+      # The store is published to by hand (Run workflow) or when PUBLISH_DICTATION is "true".
+      STORE_PUBLISH_ALLOWED: ${{ github.event_name == 'workflow_dispatch' || vars.PUBLISH_DICTATION == 'true' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -146,6 +151,13 @@ jobs:
           echo "list=$list" >>"$GITHUB_OUTPUT"
           echo "צילומי מסך: ${list:-אין}"
 
+      - name: מצב הפרסום לחנות
+        run: echo "event=${{ github.event_name }} ref=${{ github.ref }} store-secrets=$HAS_STORE_SECRETS publish-input=$PUBLISH store-publish-allowed=$STORE_PUBLISH_ALLOWED"
+
+      - name: פרסום לחנות — לא בדחיפה רגילה
+        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && env.STORE_PUBLISH_ALLOWED != 'true'
+        run: echo "::notice::התוסף לא פורסם לחנות - דחיפה רגילה ל-main בונה ויוצרת גרסה בגיטהאב בלבד. לפרסום לחנות - Actions, בנייה ואריזה, Run workflow בענף main (או המשתנה PUBLISH_DICTATION=true)."
+
       - name: פרסום לחנות — דילוג
         if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS != 'true'
         run: echo "::notice::פרסום לחנות אוצריא דולג - הסודות OTZARIA_USER ו-OTZARIA_PASSWORD לא הוגדרו במאגר (Settings > Secrets and variables > Actions)."
@@ -153,7 +165,7 @@ jobs:
       # A store problem (login, metadata) must not hold back the GitHub
       # Release with the installers: the step warns and the run goes on.
       - name: פרסום לחנות אוצריא (released בלבד)
-        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && env.PUBLISH != 'false'
+        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && env.PUBLISH != 'false' && env.STORE_PUBLISH_ALLOWED == 'true'
         id: publish
         continue-on-error: true
         uses: Otzaria/otzaria-plugin-validator@v1
