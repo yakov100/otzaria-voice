@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../third_party/onnxruntime_c_api.h"
+#include "../../third_party/onnxruntime_c_api.h"
 #include "json.h"
 #include "platform.h"
 #include "util.h"

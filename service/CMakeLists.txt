@@ -22,26 +22,32 @@ option(OTZARIA_VOICE_MINIAUDIO
   "Record with miniaudio on Windows too (other systems always use it)" OFF)
 
 set(SRC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# common/ is shared by both features; dictation/ and tts/ belong to one each.
+# All three are on the include path, so #include "x.h" works across them.
+set(SRC_COMMON ${SRC}/common)
+set(SRC_DICTATION ${SRC}/dictation)
+set(SRC_TTS ${SRC}/tts)
+include_directories(${SRC_COMMON} ${SRC_DICTATION} ${SRC_TTS})
 set(COMMON_SOURCES
-  ${SRC}/audio.cpp
-  ${SRC}/engine.cpp
-  ${SRC}/narrator.cpp
-  ${SRC}/voicemodel.cpp
-  ${SRC}/pack.cpp
-  ${SRC}/platform.cpp
-  ${SRC}/service.cpp
-  ${SRC}/util.cpp)
+  ${SRC_COMMON}/audio.cpp
+  ${SRC_DICTATION}/engine.cpp
+  ${SRC_TTS}/narrator.cpp
+  ${SRC_TTS}/voicemodel.cpp
+  ${SRC_COMMON}/pack.cpp
+  ${SRC_COMMON}/platform.cpp
+  ${SRC_COMMON}/service.cpp
+  ${SRC_COMMON}/util.cpp)
 
 if(WIN32 AND NOT OTZARIA_VOICE_MINIAUDIO)
-  set(AUDIO_SOURCES ${SRC}/audio_win.cpp)
+  set(AUDIO_SOURCES ${SRC_COMMON}/audio_win.cpp)
 else()
-  set(AUDIO_SOURCES ${SRC}/audio_miniaudio.cpp)
+  set(AUDIO_SOURCES ${SRC_COMMON}/audio_miniaudio.cpp)
 endif()
 
 if(ANDROID)
   add_library(otzaria_voice SHARED
-    ${COMMON_SOURCES} ${AUDIO_SOURCES} ${SRC}/pack_android.cpp ${SRC}/jni.cpp
-    ${SRC}/speech_none.cpp)
+    ${COMMON_SOURCES} ${AUDIO_SOURCES} ${SRC_COMMON}/pack_android.cpp ${SRC_COMMON}/jni.cpp
+    ${SRC_TTS}/speech_none.cpp)
   target_link_libraries(otzaria_voice PRIVATE log android)
   # Small and quick to load; nothing outside the JNI entry points is exported.
   set_target_properties(otzaria_voice PROPERTIES CXX_VISIBILITY_PRESET hidden)
@@ -52,8 +58,8 @@ endif()
 if(WIN32)
   add_executable(otzaria-voice WIN32
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC}/main.cpp ${SRC}/pack_win.cpp ${SRC}/install_win.cpp ${SRC}/typing_win.cpp
-    ${SRC}/speech_win.cpp)
+    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_win.cpp ${SRC_COMMON}/install_win.cpp ${SRC_DICTATION}/typing_win.cpp
+    ${SRC_TTS}/speech_win.cpp)
   target_compile_definitions(otzaria-voice PRIVATE UNICODE _UNICODE NDEBUG)
   # C++/WinRT (speech_win.cpp) under C++17 includes <experimental/coroutine>,
   # which newer MSVC refuses; with C++20 it uses <coroutine>.
@@ -71,7 +77,7 @@ if(WIN32)
 else()
   add_executable(otzaria-voice
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC}/main.cpp ${SRC}/pack_posix.cpp ${SRC}/install_posix.cpp ${SRC}/speech_none.cpp)
+    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_posix.cpp ${SRC_COMMON}/install_posix.cpp ${SRC_TTS}/speech_none.cpp)
   find_package(Threads REQUIRED)
   target_link_libraries(otzaria-voice PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
   target_compile_options(otzaria-voice PRIVATE -O2 -Wall)

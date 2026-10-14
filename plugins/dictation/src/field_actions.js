@@ -5,9 +5,9 @@
 // that field; the recognized words are written into the field as they come,
 // around what was there before. A second click, or a pause after a sentence,
 // ends it; the user presses Enter to search. See
-// docs/search-field-actions-contract.md.
+// docs/dictation/search-field-actions-contract.md.
 //
-// Only the 0.9.99 build of the plugin contains this file (plugin/build.py).
+// Only the 0.9.99 build of the plugin contains this file (plugins/dictation/build.py).
 
 const FIELD_ACTION_ID = 'dictate';
 let fieldSession = null; // { sessionId, sent, pending, writing }

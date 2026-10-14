@@ -117,15 +117,15 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 
 ## למפתחים
 
-- `service/`: קוד שירות הדיבור (C++, נבנה עם CMake), ו-`service/android/` לאפליקציית האנדרואיד. פרטים בקובץ `docs/platforms.md`.
-- `plugin-tts/`: התוסף "הקראה קולית", כפי שהוא נארז (`otzaria pack-plugin plugin-tts`).
-- `plugin/`: מקורות התוסף "חיפוש בדיבור". הפקודה `python plugin/build.py` יוצרת ממנו שתי חבילות:
+- `service/`: קוד שירות הדיבור (C++, נבנה עם CMake). `service/src/common/` משותף להכתבה ולהקראה, `service/src/dictation/` להכתבה בלבד ו-`service/src/tts/` להקראה בלבד. כלי העזר ב-`tools/dictation/` וב-`tools/tts/`, והתיעוד ב-`docs/dictation/`, `docs/tts/` ו-`docs/shared/`, ו-`service/android/` לאפליקציית האנדרואיד. פרטים בקובץ `docs/shared/platforms.md`.
+- `plugins/read-aloud/`: התוסף "הקראה קולית", כפי שהוא נארז (`otzaria pack-plugin plugins/read-aloud`).
+- `plugins/dictation/`: מקורות התוסף "חיפוש בדיבור". הפקודה `python plugins/dictation/build.py` יוצרת ממנו שתי חבילות:
   - `released`: לגרסת אוצריא הנוכחית. זו החבילה שמתפרסמת בחנות ובדף הגרסאות.
   - `next`: לגרסת אוצריא הבאה (כפתור מיקרופון בתוך שדות החיפוש). היא נבנית רק כקובץ לבדיקה, ולא מתפרסמת.
 - `installer/`: סקריפטים לבניית המתקינים לכל מערכת.
 - `.github/workflows/build.yml`: בכל דחיפה בונה את השירות לכל המערכות, את המתקינים ואת התוסף.
   הוא מתקין כל מתקין על מחשב הבדיקה (באנדרואיד: באמולטור), מריץ דרכו הכתבה, ומעלה את כל הקבצים כ-Artifacts של הריצה.
-  כשמעלים את מספר הגרסה ב-`plugin/manifest.base.json` ודוחפים ל-`main`, נוצרת גרסה חדשה בדף הגרסאות עם כל הקבצים. התוסף אינו מתפרסם בחנות בדחיפה רגילה (ראו "פרסום לחנות אוצריא").
+  כשמעלים את מספר הגרסה ב-`plugins/dictation/manifest.base.json` ודוחפים ל-`main`, נוצרת גרסה חדשה בדף הגרסאות עם כל הקבצים. התוסף אינו מתפרסם בחנות בדחיפה רגילה (ראו "פרסום לחנות אוצריא").
 
 ### פרסום לחנות אוצריא
 
@@ -149,8 +149,8 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
   `6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048`.
 - **הקראה בקול מוקלט**: [`voice-model-v1`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-model-v1),
   `3a757b8888699a48661bb1b43096bf5cf00035b6b23d8e3fdf4152d5b4c2af06`. נבנית מתיקיית מודלים
-  עובדת בפקודה `python service/tools/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)
-  נוצר מהקלטה בעזרת `service/tools/make_voice.py`. פרטי המודלים ב-`docs/tts-research.md`.
+  עובדת בפקודה `python tools/tts/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)
+  נוצר מהקלטה בעזרת `tools/tts/make_voice.py`. פרטי המודלים ב-`docs/tts/tts-research.md`.
 
 ## רישיונות וקרדיטים
 

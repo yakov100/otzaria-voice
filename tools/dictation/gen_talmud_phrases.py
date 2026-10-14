@@ -10,7 +10,7 @@ segment.
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "src", "talmud_phrases.h")
+OUT = os.path.join(HERE, "..", "..", "service", "src", "dictation", "talmud_phrases.h")
 
 phrases = [l.split("\t")[0] for l in open(os.path.join(HERE, "talmud_phrases.txt"), encoding="utf-8").read().splitlines() if l.strip()]
 with open(OUT, "w", encoding="utf-8", newline="\n") as f:

@@ -1,12 +1,12 @@
 """Builds the two installable forms of the plugin from one source.
 
-    python plugin/build.py            -> plugin/packages/released, plugin/packages/next
+    python plugins/dictation/build.py            -> plugins/dictation/packages/released, plugins/dictation/packages/next
 
 released  minAppVersion 0.9.98 (Otzaria as released today): a microphone
           button in the reader's toolbar and a keyboard shortcut; the result
           opens in a search tab.
 next      minAppVersion 0.9.99 (Otzaria with search-field actions, see
-          docs/search-field-actions-contract.md): the same, plus a microphone
+          docs/dictation/search-field-actions-contract.md): the same, plus a microphone
           inside Otzaria's search fields that writes into the field.
 
 Why two: Otzaria rejects a manifest whose permission it does not know
@@ -54,7 +54,7 @@ def manifest_for(name):
 def bundle(files):
     # One classic script: on Linux and Android Otzaria loads a headless entry
     # from file://, where ES modules are blocked.
-    parts = ["/* חיפוש בדיבור — built by plugin/build.py from plugin/src; do not edit. */",
+    parts = ["/* חיפוש בדיבור — built by plugins/dictation/build.py from plugins/dictation/src; do not edit. */",
              "(function () {", "'use strict';", ""]
     for f in files:
         parts.append((SRC / f).read_text(encoding="utf-8").rstrip() + "\n")

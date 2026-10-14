@@ -80,9 +80,9 @@ API_REFERENCE, spec.json, DESIGN_GUIDE, ICONS, COOKBOOK), וקוד אוצריא 
 2. כלי האריזה של אוצריא **דוחה** תוסף שקורא לפקודה חדשה יותר מגרסת המינימום
    שהוא מצהיר עליה (`search.setFieldText` קיימת רק מ-0.9.99).
 
-לכן הקוד אחד (`plugin/src`), והפקודה `python plugin/build.py` מייצרת שתי
-חבילות: `plugin/packages/released` (גרסה 2.0.0, לאוצריא 0.9.98) ו-
-`plugin/packages/next` (גרסה 2.1.0, לאוצריא 0.9.99 ואילך, עם המיקרופון
+לכן הקוד אחד (`plugins/dictation/src`), והפקודה `python plugins/dictation/build.py` מייצרת שתי
+חבילות: `plugins/dictation/packages/released` (גרסה 2.0.0, לאוצריא 0.9.98) ו-
+`plugins/dictation/packages/next` (גרסה 2.1.0, לאוצריא 0.9.99 ואילך, עם המיקרופון
 בשדות). מי שמעדכן את אוצריא יקבל את 2.1.0.
 
 ## מה אי אפשר — ולמה

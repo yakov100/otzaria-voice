@@ -936,7 +936,7 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
 }
 
 #ifndef _WIN32
-// Typing into other programs is Windows-only for now (see docs/platforms.md).
+// Typing into other programs is Windows-only for now (see docs/shared/platforms.md).
 void startTyping() {}
 const char* typingHotkey() { return ""; }
 #endif

@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#include "../third_party/onnxruntime_c_api.h"
+#include "../../third_party/onnxruntime_c_api.h"
 #include "json.h"
 
 namespace narrator {

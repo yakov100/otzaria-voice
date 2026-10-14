@@ -129,7 +129,7 @@ it. The plugin must keep working without it.
 Plugin side (as built): runtime detection alone is not enough, because one
 package cannot serve both hosts — 0.9.98 rejects the unknown permission
 `search.field_actions` at install, and the packager rejects calls to
-`search.setFieldText` & co. under `minAppVersion` 0.9.98. So `plugin/build.py`
+`search.setFieldText` & co. under `minAppVersion` 0.9.98. So `plugins/dictation/build.py`
 produces two packages from one source: `released` (0.9.98, toolbar button +
 shortcut, no field-action code) and `next` (0.9.99, adds the permission, the
 `searchFieldActions` item with `fields: fullText, library, inBook, findRef`, and
