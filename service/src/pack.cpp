@@ -174,6 +174,8 @@ int installedVersion() {
   return v;
 }
 
+bool outdated() { return ready() && installedVersion() < kRelease.version; }
+
 Progress progress() {
   std::lock_guard<std::mutex> lock(mu);
   return current;

@@ -35,6 +35,9 @@ Path installTarget();
 Path userDir();
 bool ready();                // every required file present
 int installedVersion();      // 0 when none
+// A pack is in use but older than kRelease: the user is offered the new one (never
+// installed unasked; a missing pack is a different case, see ready()).
+bool outdated();
 
 struct Progress {
   std::string state = "idle";  // idle | downloading | verifying | extracting | done | error

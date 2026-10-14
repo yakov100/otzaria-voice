@@ -533,6 +533,8 @@ void handle(Socket s) {
                   (pack::ready() ? "true" : "false") +
                   ",\"packVersion\":" + std::to_string(pack::installedVersion()) +
                   ",\"packSize\":" + std::to_string(pack::kRelease.size) +
+                  ",\"packLatest\":" + std::to_string(pack::kRelease.version) +
+                  ",\"packOutdated\":" + (pack::outdated() ? "true" : "false") +
                   ",\"packJob\":" + packJob() + ",\"hotkey\":" + json::quote(typingHotkey()) +
                   ",\"runtime\":" + (runtimeFound() ? "true" : "false") +
                   ",\"microphone\":" + (microphoneAllowed ? "true" : "false") +

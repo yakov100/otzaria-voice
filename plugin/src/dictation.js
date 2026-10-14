@@ -117,6 +117,7 @@ async function readyToDictate() {
     await explainFailure(new ServiceError('microphone_background', ''), st);
     return null;
   }
+  if (await offerPackUpdate(st)) return null;
   return st;
 }
 

@@ -113,6 +113,19 @@ function watchPack() {
   }, 2000);
 }
 
+/** Asks the service to download the pack and reports its progress. True when it started. */
+async function startPackDownload() {
+  try {
+    await serviceCall('/install-pack', 'POST');
+    say('מוריד את חבילת הדיבור…');
+    watchPack();
+    return true;
+  } catch (e) {
+    sayError('הורדת חבילת הדיבור לא התחילה: ' + e.message);
+    return false;
+  }
+}
+
 async function offerPack(st) {
   if (PACK_BUSY.includes(st.packJob && st.packJob.state)) {
     say('חבילת הדיבור עדיין יורדת; נודיע כשהיא מוכנה');
@@ -127,13 +140,36 @@ async function offerPack(st) {
       'להוריד עכשיו?',
   );
   if (!ok) return;
+  await startPackDownload();
+}
+
+const PACK_UPDATE_ASK_AGAIN_MS = 14 * 24 * 3600 * 1000;
+
+/**
+ * The pack in use works, but the service knows a newer one (st.packOutdated). The user is
+ * asked once per pack version and again after two weeks; declining costs nothing, the pack
+ * in use keeps working. True when a download started, so the dictation must wait for it.
+ */
+async function offerPackUpdate(st) {
+  if (!st.packOutdated) return false;
+  const key = 'packUpdateDeclined';
   try {
-    await serviceCall('/install-pack', 'POST');
-    say('מוריד את חבילת הדיבור…');
-    watchPack();
-  } catch (e) {
-    sayError('הורדת חבילת הדיבור לא התחילה: ' + e.message);
-  }
+    const saved = await Otzaria.call('storage.get', { key });
+    const [version, at] = String((saved && saved.success && saved.data) || '').split(':').map(Number);
+    if (version === st.packLatest && Date.now() - at < PACK_UPDATE_ASK_AGAIN_MS) return false;
+  } catch (_) {}
+  const ok = await ask(
+    'חבילת דיבור מעודכנת',
+    'יצאה חבילת דיבור מעודכנת, בגודל כ-' + megabytes(st.packSize) + ' מגה-בייט.\n' +
+      'ההורדה לוקחת כמה דקות, ובזמנה אי אפשר להכתיב; אחריה הזיהוי משתמש בחבילה החדשה.\n' +
+      'לא חייבים לעדכן: «ביטול» ממשיך עם החבילה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
+      'להוריד עכשיו?',
+  );
+  if (ok) return startPackDownload();
+  try {
+    await Otzaria.call('storage.set', { key, value: st.packLatest + ':' + Date.now() });
+  } catch (_) {}
+  return false;
 }
 
 /** Why a dictation could not run, in words the user can act on. */
