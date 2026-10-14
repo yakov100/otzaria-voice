@@ -145,8 +145,8 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 חבילות הקול גדולות מדי בשביל git. הן שמורות כקבצים בגרסאות ייעודיות, ומשם השירות (ותהליך
 הבנייה) מורידים אותן. טביעת ה-SHA-256 של כל חבילה נבדקת בכל הורדה.
 
-- **הקלדה בדיבור**: [`voice-pack-v3`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-pack-v3),
-  `bde4cfd19a2a581f7836267ddd7ece700bf93c51e122306d6a567958f4c7eb1e`.
+- **הקלדה בדיבור**: [`voice-pack-v4`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-pack-v4),
+  `6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048`.
 - **הקראה בקול מוקלט**: [`voice-model-v1`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-model-v1),
   `3a757b8888699a48661bb1b43096bf5cf00035b6b23d8e3fdf4152d5b4c2af06`. נבנית מתיקיית מודלים
   עובדת בפקודה `python service/tools/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)

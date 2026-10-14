@@ -15,10 +15,10 @@
 namespace pack {
 
 const Release kRelease = {
-    3,
-    "https://github.com/yakov100/otzaria-voice/releases/download/voice-pack-v3/otzaria-voice-he-v3.zip",
-    334167487,
-    "bde4cfd19a2a581f7836267ddd7ece700bf93c51e122306d6a567958f4c7eb1e",
+    4,
+    "https://github.com/yakov100/otzaria-voice/releases/download/voice-pack-v4/otzaria-voice-he-v4.zip",
+    334195669,
+    "6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048",
 };
 
 namespace fs = std::filesystem;
