@@ -287,6 +287,9 @@ struct Narrator::Impl {
   OrtSession* embed = nullptr;
   OrtSession* lm = nullptr;
   OrtSession* decoder = nullptr;
+  // The decoder's runs can be terminated from another thread (a watchdog):
+  // one token sequence was seen to loop inside the decoder graph for ever.
+  OrtRunOptions* decoderRun = nullptr;
   std::vector<std::string> lmInputNames, lmOutputNames;
 
   std::unordered_map<std::u32string, int64_t> nakdanVocab;
@@ -375,7 +378,8 @@ struct Narrator::Impl {
     for (auto& n : inNames) ip.push_back(n.c_str());
     for (auto& n : outNames) op.push_back(n.c_str());
     std::vector<OrtValue*> out(outNames.size(), nullptr);
-    check(api->Run(s, nullptr, ip.data(), in.data(), in.size(), op.data(), op.size(), out.data()));
+    check(api->Run(s, s == decoder ? decoderRun : nullptr, ip.data(), in.data(), in.size(), op.data(), op.size(),
+                   out.data()));
     return out;
   }
 
@@ -391,6 +395,7 @@ struct Narrator::Impl {
     if (!api) return;
     for (OrtSession* s : {nakdan, embed, lm, decoder})
       if (s) api->ReleaseSession(s);
+    if (decoderRun) api->ReleaseRunOptions(decoderRun);
     if (memory) api->ReleaseMemoryInfo(memory);
     if (env) api->ReleaseEnv(env);
   }
@@ -407,6 +412,7 @@ Narrator::Narrator(const Path& ortLibrary, const Path& modelDir, int lmThreads, 
   if (!o.api) throw std::runtime_error("ONNX Runtime too old");
   o.check(o.api->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "otzaria-narrator", &o.env));
   o.check(o.api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &o.memory));
+  o.check(o.api->CreateRunOptions(&o.decoderRun));
   o.check(o.api->GetAllocatorWithDefaultOptions(&o.allocator));
 
   // Vocabularies.
@@ -677,9 +683,9 @@ bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voi
                         const std::function<void(size_t, std::vector<float>)>& onAudio,
                         const std::function<void(size_t, size_t, double)>& onProgress) {
   std::mutex mu;
-  std::condition_variable cv;
+  std::condition_variable cv, watchdogCv;
   std::deque<std::pair<size_t, std::vector<int64_t>>> queue;
-  bool finished = false;
+  bool finished = false, decoding = false;
   std::exception_ptr failure;
   const size_t kBatch = batchSize();
   const size_t decodeAtOnce = decodeBatched() ? kBatch : 1;
@@ -701,9 +707,71 @@ bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voi
         }
         cv.notify_all();
         if (cancelled()) continue;
+        // A piece the model gave no tokens for (it stopped at once, or the
+        // run of one token was all there was) becomes a short silence: the
+        // decoder is not run on an empty sequence.
+        for (auto& t : tokens)
+          if (t.size() < 2) t.clear();
+        if (timing()) {
+          std::string dump;
+          for (const auto& t : tokens) {
+            dump += dump.empty() ? "" : " | ";
+            for (auto id : t) dump += std::to_string(id) + ",";
+          }
+          platform::log("decoding: " + dump);
+        }
         // The batch's pieces enter the queue in order, so the audio is too.
         const auto t0 = std::chrono::steady_clock::now();
-        auto audio = decodeBatch(tokens, voice);
+        std::vector<std::vector<float>> audio(tokens.size());
+        {
+          std::vector<std::vector<int64_t>> real;
+          std::vector<size_t> at;
+          size_t longest = 0;
+          for (size_t k = 0; k < tokens.size(); k++)
+            if (tokens[k].empty()) audio[k].assign(size_t(kSampleRate / 4), 0.0f);
+            else {
+              real.push_back(tokens[k]);
+              at.push_back(k);
+              longest = std::max(longest, tokens[k].size());
+            }
+          // A watchdog: the decoder takes about 40 ms a token; one sequence
+          // was seen to loop inside the graph for ever. Past the limit the
+          // run is terminated and the pieces become silence (logged, with
+          // their tokens, so the case can be studied).
+          decoding = true;
+          std::thread watchdog([&, limit = std::chrono::milliseconds(20000 + 300 * (long long)longest * (long long)real.size())] {
+            std::unique_lock<std::mutex> lock(mu);
+            if (!watchdogCv.wait_for(lock, limit, [&] { return !decoding; })) {
+              platform::log("decoder watchdog: terminating a run of " + std::to_string(real.size()) + " pieces after " +
+                            std::to_string(limit.count() / 1000) + " s");
+              terminateDecoder();
+            }
+          });
+          std::vector<std::vector<float>> decoded;
+          std::string problem;
+          try {
+            if (!real.empty()) decoded = decodeBatch(real, voice);
+          } catch (const std::exception& e) {
+            problem = e.what();
+          }
+          {
+            std::lock_guard<std::mutex> lock(mu);
+            decoding = false;
+          }
+          watchdogCv.notify_all();
+          watchdog.join();
+          resumeDecoder();
+          if (!problem.empty()) {
+            std::string dump;
+            for (const auto& t : real) {
+              dump += dump.empty() ? "" : " | ";
+              for (auto id : t) dump += std::to_string(id) + ",";
+            }
+            platform::log("decoder failed (" + problem + "); silence instead. tokens: " + dump);
+            decoded.assign(real.size(), std::vector<float>(size_t(kSampleRate / 4), 0.0f));
+          }
+          for (size_t k = 0; k < at.size(); k++) audio[at[k]] = std::move(decoded[k]);
+        }
         if (timing()) {
           size_t n = 0, longest = 0;
           for (const auto& t : tokens) {
@@ -950,12 +1018,24 @@ std::vector<std::vector<int64_t>> Narrator::generateBatch(const std::vector<std:
     maskLen++;
   }
 
-  // The new speech tokens, without start and stop.
+  // The new speech tokens, without start and stop. A run of one token
+  // longer than half a second is cut to that: such runs are silence or a
+  // held sound the model got stuck on, and one of them (54 tokens, mostly
+  // one id) hung the decoder inside a kernel for ever.
+  constexpr size_t kMaxSameRun = 12;
   std::vector<std::vector<int64_t>> out(rows);
-  for (size_t b = 0; b < rows; b++)
-    out[b].assign(generated[b].begin() + 1, generated[b].end() - (stopped[b] ? 1 : 0));
+  for (size_t b = 0; b < rows; b++) {
+    size_t run = 0;
+    for (auto it = generated[b].begin() + 1; it != generated[b].end() - (stopped[b] ? 1 : 0); ++it) {
+      run = (!out[b].empty() && out[b].back() == *it) ? run + 1 : 1;
+      if (run <= kMaxSameRun) out[b].push_back(*it);
+    }
+  }
   return out;
 }
+
+void Narrator::terminateDecoder() { impl_->api->RunOptionsSetTerminate(impl_->decoderRun); }
+void Narrator::resumeDecoder() { impl_->api->RunOptionsUnsetTerminate(impl_->decoderRun); }
 
 std::vector<float> Narrator::decode(const std::vector<int64_t>& tokens, const Voice& voice) {
   auto& o = *impl_;

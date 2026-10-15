@@ -108,12 +108,16 @@ def main():
                OTZARIA_NARRATOR_PROMPT_SECONDS=str(args.prompt_seconds),
                OTZARIA_NARRATOR_LM_THREADS=str(args.lm_threads),
                OTZARIA_NARRATOR_DECODER_THREADS=str(args.decoder_threads),
-               OTZARIA_NARRATOR_BATCH="6")
+               OTZARIA_NARRATOR_BATCH="6",
+               OTZARIA_NARRATOR_TIMING="1")  # per-batch lines in service.log: where a stall is
     shards = [rows[i:i + args.shard] for i in range(0, len(rows), args.shard)]
     for n, shard in enumerate(shards):
-        shard_dir = os.path.join(work, "gen", f"{n:04d}")
-        if os.path.exists(os.path.join(shard_dir, "done")) or all(r[0] in done_ids for r in shard):
+        # Lines already in clips.jsonl are never redone, whatever the shard
+        # size was when they were made.
+        shard = [r for r in shard if r[0] not in done_ids]
+        if not shard:
             continue
+        shard_dir = os.path.join(work, "gen", f"{n:04d}")
         if os.path.exists(os.path.join(work, "STOP")):
             print("STOP found; stopping before shard", n, file=sys.stderr)
             return
@@ -151,7 +155,7 @@ def main():
                 os.remove(os.path.join(shard_dir, f"{i:02d}.wav"))
             except OSError:
                 pass
-        open(os.path.join(shard_dir, "done"), "w").close()
+        done_ids.update(r[0] for r in shard)
         audio = sum(report[i]["seconds"] for i in report)
         print(f"  {audio / 60:.1f} min of audio in {(time.time() - t0) / 60:.1f} min", file=sys.stderr, flush=True)
 

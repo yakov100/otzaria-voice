@@ -101,6 +101,10 @@ class Narrator {
   std::vector<int64_t> generate(const std::string& vocalized, const Voice& voice,
                                 const std::function<bool()>& cancelled);
   std::vector<float> decode(const std::vector<int64_t>& tokens, const Voice& voice);
+  // Ends the decoder's current run from another thread (it fails with an
+  // error); resumeDecoder lets the next run go. speakAll's watchdog uses it.
+  void terminateDecoder();
+  void resumeDecoder();
 
   // The audio of several pieces in one decoder call, one result per piece
   // (in order). Rows are padded on the right to the longest, each with its
