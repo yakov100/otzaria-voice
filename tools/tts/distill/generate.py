@@ -124,7 +124,10 @@ def main():
                 f.write(MARKS.sub("", text) + "\n")
         t0 = time.time()
         print(f"shard {n + 1}/{len(shards)}: {len(shard)} lines ...", file=sys.stderr, flush=True)
-        r = subprocess.run([exe, "--narrate", args.pack, voice, text_path, shard_dir], env=env)
+        # Below-normal priority: the computer stays usable while this runs.
+        below_normal = 0x4000 if os.name == "nt" else 0
+        r = subprocess.run([exe, "--narrate", args.pack, voice, text_path, shard_dir], env=env,
+                           creationflags=below_normal)
         if r.returncode != 0:
             sys.exit(f"narrate failed on shard {n} (exit {r.returncode}); see %LOCALAPPDATA%\\OtzariaVoice\\service.log")
         report = {}
