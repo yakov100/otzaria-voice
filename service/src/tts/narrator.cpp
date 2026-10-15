@@ -507,7 +507,7 @@ std::vector<int64_t> Narrator::textTokens(const std::string& vocalized) const {
 
 // ---------------------------------------------------------------- nikud
 
-std::string Narrator::vocalize(const std::string& text) {
+std::string Narrator::vocalize(const std::string& text, bool withMarks) {
   auto& o = *impl_;
   const std::u32string s = toU32(text);
 
@@ -552,9 +552,12 @@ std::string Narrator::vocalize(const std::string& text) {
     words.push_back(w);
   }
   if (words.empty()) return text;
+  if (withMarks) needModel = true;  // the marks come from the model whatever gives the nikud
 
-  // The model's class (and kSin for a sin dot) for each character of plain.
-  std::vector<unsigned char> classes(plain.size(), 0);
+  // The model's class (and kSin for a sin dot) for each character of plain,
+  // and its pronunciation marks (kStress, kVocalShva) when asked for.
+  constexpr unsigned char kStress = 1, kVocalShva = 2;
+  std::vector<unsigned char> classes(plain.size(), 0), marks(plain.size(), 0);
   auto runModel = [&](size_t from, size_t to) {
     std::vector<int64_t> ids = nakdanTokens(plain.substr(from, to - from));
     std::vector<int64_t> mask(ids.size(), 1), types(ids.size(), 0);
@@ -572,15 +575,20 @@ std::string Narrator::vocalize(const std::string& text) {
         o.release(b);
       }
     } guard{o, in, out};
-    out = o.run(o.nakdan, {"input_ids", "attention_mask", "token_type_ids"}, in, {"nikud_logits", "shin_logits"});
+    out = o.run(o.nakdan, {"input_ids", "attention_mask", "token_type_ids"}, in,
+                {"nikud_logits", "shin_logits", "additional_logits"});
     const float* nikud = o.dataOf<float>(out[0]);
     const float* shin = o.dataOf<float>(out[1]);
+    // Phonikud's extra heads, one binary classifier each (logit > 0):
+    // 0 stress (hat'ama), 1 vocal shva, 2 prefix boundary (not used).
+    const float* extra = o.dataOf<float>(out[2]);
     for (size_t i = from; i < to; i++) {
       if (!isHebrewLetter(plain[i])) continue;
       const size_t tok = i - from + 1;  // after [CLS]
       const float* row = nikud + tok * nikud::kClassCount;
       const int cls = int(std::max_element(row, row + nikud::kClassCount) - row);
       classes[i] = (unsigned char)cls | (shin[tok * 2 + 1] > shin[tok * 2] ? nikud::kSin : 0);
+      marks[i] = (extra[tok * 3] > 0 ? kStress : 0) | (extra[tok * 3 + 1] > 0 ? kVocalShva : 0);
     }
   };
   if (needModel) {
@@ -601,22 +609,52 @@ std::string Narrator::vocalize(const std::string& text) {
     for (size_t i = from; i < to; i++)
       if (s[i] != '|') result.push_back(s[i]);
   };
+  // After a letter and its nikud: the pronunciation marks, if asked for. A
+  // vocal shva is only meaningful on a shva.
+  auto addMarks = [&](size_t plainIndex, const std::u32string& lettersMarks) {
+    if (!withMarks) return;
+    const unsigned char m = marks[plainIndex];
+    if (m & kStress) result.push_back(0x05AB);
+    if ((m & kVocalShva) && lettersMarks.find(U'ְ') != std::u32string::npos) result.push_back(0x05BD);
+  };
   for (const Word& w : words) {
     copy(at, w.from);
     if (w.keep) {
-      copy(w.from, w.to);
+      // Letter by letter: the letter, its own marks (teamim and '|' dropped
+      // only when marks are added, to keep the output clean), then ours.
+      for (size_t i = w.from; i < w.to;) {
+        const size_t letterAt = i;
+        const char32_t c = s[i++];
+        std::u32string own;
+        while (i < w.to && !isHebrewLetter(s[i])) {
+          if (withMarks ? isNikud(s[i]) : s[i] != '|') own.push_back(s[i]);
+          i++;
+        }
+        result.push_back(c);
+        result += own;
+        addMarks(plainAt[letterAt], own);
+      }
     } else if (w.pattern) {
-      result += nikud::apply(w.letters, *w.pattern);
+      size_t letterIndex = 0;
+      for (size_t i = w.from; i < w.to; i++) {
+        if (!isHebrewLetter(s[i])) continue;
+        const std::u32string one = nikud::apply(w.letters.substr(letterIndex, 1), w.pattern->substr(letterIndex, 1));
+        result += one;
+        addMarks(plainAt[i], one);
+        letterIndex++;
+      }
     } else {
       for (size_t i = w.from; i < w.to; i++) {
         const char32_t c = s[i];
         if (!isHebrewLetter(c)) continue;  // teamim on an unvocalized word: dropped
         result.push_back(c);
         const unsigned char p = classes[plainAt[i]];
-        if (c == U'ש') result.push_back(p & nikud::kSin ? 0x05C2 : 0x05C1);
+        std::u32string own;
+        if (c == U'ש') own.push_back(p & nikud::kSin ? 0x05C2 : 0x05C1);
         const int cls = p & 0x1F;
-        if (cls == 1) continue;  // mater lectionis: the letter is read as a vowel, no mark
-        result += nikud::kClasses[cls];
+        if (cls != 1) own += nikud::kClasses[cls];  // 1: mater lectionis, read as a vowel, no mark
+        result += own;
+        addMarks(plainAt[i], own);
       }
     }
     at = w.to;

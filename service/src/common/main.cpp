@@ -50,7 +50,7 @@ int run(const std::vector<std::string>& args) {
   if (arg == "--vocalize" && args.size() > 4) {
     try {
       return service::vocalizeTest(platform::fromUtf8(args[2]), platform::fromUtf8(args[3]),
-                                   platform::fromUtf8(args[4]));
+                                   platform::fromUtf8(args[4]), args.size() > 5 && args[5] == "--marks");
     } catch (const std::exception& ex) {
       platform::log(std::string("vocalize: ") + ex.what());
       return 3;

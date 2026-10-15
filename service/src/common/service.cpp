@@ -948,27 +948,51 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
   std::ifstream in(text, std::ios::binary);
   std::string line;
   int lineNo = 0;
+  if (pipeline) {
+    // All the lines' pieces go through speakAll together, in chunks of
+    // lines, so that the batches are full even when every line is one short
+    // sentence (the training-data generator feeds a sentence a line).
+    constexpr size_t kChunkLines = 40;
+    std::vector<std::string> lines;
+    while (std::getline(in, line)) {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (!util::trim(line).empty()) lines.push_back(line);
+    }
+    for (size_t start = 0; start < lines.size(); start += kChunkLines) {
+      const size_t end = std::min(lines.size(), start + kChunkLines);
+      std::vector<std::string> pieces;
+      std::vector<size_t> lineOf;  // piece -> index into lines
+      for (size_t i = start; i < end; i++)
+        for (const auto& p : narrator::pieces(lines[i])) {
+          pieces.push_back(p);
+          lineOf.push_back(i);
+        }
+      std::vector<std::vector<float>> audio(end - start);
+      const auto t1 = std::chrono::steady_clock::now();
+      n.speakAll(pieces, voice, [] { return false; }, [&](size_t piece, std::vector<float> pcm) {
+        auto& all = audio[lineOf[piece] - start];
+        if (!all.empty()) all.insert(all.end(), narrator::kSampleRate / 6, 0.0f);
+        all.insert(all.end(), pcm.begin(), pcm.end());
+      });
+      const auto t2 = std::chrono::steady_clock::now();
+      for (size_t i = start; i < end; i++) {
+        lineNo++;
+        fprintf(report, "{\"line\":%d,\"pipeline\":true,\"seconds\":%.2f,\"ms\":%lld}\n", lineNo,
+                double(audio[i - start].size()) / narrator::kSampleRate, ms(t1, t2) / (long long)(end - start));
+        char name[32];
+        snprintf(name, sizeof name, "%02d.wav", lineNo);
+        writeWav16(outDir / name, audio[i - start], narrator::kSampleRate);
+      }
+      fflush(report);
+    }
+    fclose(report);
+    return 0;
+  }
   while (std::getline(in, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (util::trim(line).empty()) continue;
     lineNo++;
     std::vector<float> all;
-    if (pipeline) {
-      const auto pieces = narrator::pieces(line);
-      const auto t1 = std::chrono::steady_clock::now();
-      n.speakAll(pieces, voice, [] { return false; }, [&](size_t, std::vector<float> pcm) {
-        all.insert(all.end(), pcm.begin(), pcm.end());
-        all.insert(all.end(), narrator::kSampleRate / 6, 0.0f);
-      });
-      const auto t2 = std::chrono::steady_clock::now();
-      fprintf(report, "{\"line\":%d,\"pipeline\":true,\"seconds\":%.2f,\"ms\":%lld}\n", lineNo,
-              double(all.size()) / narrator::kSampleRate, ms(t1, t2));
-      fflush(report);
-      char name[32];
-      snprintf(name, sizeof name, "%02d.wav", lineNo);
-      writeWav16(outDir / name, all, narrator::kSampleRate);
-      continue;
-    }
     for (const auto& piece : narrator::pieces(line)) {
       const auto t1 = std::chrono::steady_clock::now();
       const std::string vocalized = n.vocalize(piece);
@@ -994,7 +1018,8 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
   return 0;
 }
 
-int vocalizeTest(const platform::Path& models, const platform::Path& text, const platform::Path& out) {
+int vocalizeTest(const platform::Path& models, const platform::Path& text, const platform::Path& out,
+                 bool withMarks) {
   const auto ort = platform::findOnnxRuntime();
   if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
   narrator::Narrator n(ort, models, 4, 1);
@@ -1003,7 +1028,7 @@ int vocalizeTest(const platform::Path& models, const platform::Path& text, const
   std::string line;
   while (std::getline(in, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    o << (util::trim(line).empty() ? line : n.vocalize(line)) << '\n';
+    o << (util::trim(line).empty() ? line : n.vocalize(line, withMarks)) << '\n';
   }
   return 0;
 }

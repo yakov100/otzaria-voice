@@ -85,8 +85,11 @@ class Narrator {
   // Adds nikud to the words that have none: from the lexicon when it knows
   // the word (after the word before it), else from the diacritizer, which
   // reads the whole text (in windows of about 2000 characters) for context.
-  // Words already vocalized are kept as they are.
-  std::string vocalize(const std::string& text);
+  // Words already vocalized are kept as they are. With [withMarks] the
+  // diacritizer's pronunciation marks are added after the letter's nikud:
+  // U+05AB (ole) on the stressed letter and U+05BD (meteg) on a vocal
+  // shva, as Phonikud defines them; the light voice is trained on them.
+  std::string vocalize(const std::string& text, bool withMarks = false);
 
   // Speaks one piece (vocalize it first) in [voice]: 24 kHz mono samples.
   // [cancelled] is polled between tokens; when it returns true the result
