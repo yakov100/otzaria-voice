@@ -983,7 +983,11 @@ std::vector<std::vector<int64_t>> Narrator::generateBatch(const std::vector<std:
         float& l = logits[size_t(t)];
         l = l < 0 ? l * kRepetitionPenalty : l / kRepetitionPenalty;
       }
-      const int64_t next = int64_t(std::max_element(logits.begin(), logits.end()) - logits.begin());
+      // Only speech codes and the stop token may be chosen: the head has
+      // 8194 slots, and once it picked 8043, a code the decoder has no
+      // embedding for, which hung the decoder inside a kernel for ever.
+      const auto choices = logits.begin() + std::min<int64_t>(vocab, kStopSpeech + 1);
+      const int64_t next = int64_t(std::max_element(logits.begin(), choices) - logits.begin());
       gen.push_back(next);
       if (next == kStopSpeech) {
         stopped[b] = true;
@@ -1039,9 +1043,12 @@ void Narrator::resumeDecoder() { impl_->api->RunOptionsUnsetTerminate(impl_->dec
 
 std::vector<float> Narrator::decode(const std::vector<int64_t>& tokens, const Voice& voice) {
   auto& o = *impl_;
-  // The recording's tokens first: the decoder continues its voice.
+  // The recording's tokens first: the decoder continues its voice. Only
+  // speech codes (below kStartSpeech) go in; anything else would index
+  // outside the decoder's embedding table.
   std::vector<int64_t> speech(voice.promptTokens);
-  speech.insert(speech.end(), tokens.begin(), tokens.end());
+  for (int64_t t : tokens)
+    if (t >= 0 && t < kStartSpeech) speech.push_back(t);
   std::vector<float> xVector(voice.xVector), feat(voice.promptFeat);
   std::vector<OrtValue*> in{
       o.tensor(speech.data(), speech.size(), {1, int64_t(speech.size())}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
