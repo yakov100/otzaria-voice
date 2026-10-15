@@ -52,7 +52,9 @@ const char* kVersion = "2.2.0";
 
 namespace {
 
-constexpr auto kUnloadAfter = std::chrono::minutes(3);
+// A reload costs 1-4 s (model graph, 98 MB language model, phrase tables), which
+// the user hears as "I spoke and the text came late"; an idle engine costs only RAM.
+constexpr auto kUnloadAfter = std::chrono::minutes(20);
 constexpr auto kMaxSession = std::chrono::seconds(100);  // fetchStream caps a request at 120s
 
 #if defined(_WIN32)
@@ -522,11 +524,11 @@ void handle(Socket s) {
     if (req.headers.count("origin") || !req.headers.count("x-otzaria-voice")) {
       respond(s, 403, errorBody("forbidden", "requests must come from an Otzaria plugin"));
     } else if (req.method == "GET" && req.path == "/status") {
-      bool loaded;
-      {
-        std::lock_guard<std::mutex> lock(engineMu);
+      // engineMu is held for the whole of a load (1-4 s): do not wait for it,
+      // a status that blocks that long delays the start of every dictation.
+      bool loaded = false;
+      if (std::unique_lock<std::mutex> lock(engineMu, std::try_to_lock); lock.owns_lock())
         loaded = engine != nullptr;
-      }
       respond(s, 200,
               std::string("{\"service\":\"otzaria-voice\",\"version\":\"") + kVersion +
                   "\",\"platform\":\"" + kPlatform + "\",\"pack\":" +
@@ -544,6 +546,17 @@ void handle(Socket s) {
                   (narrator::modelReady() ? "true" : "false") + ",\"voiceModelSize\":" +
                   std::to_string(voicemodel::kRelease.size) + ",\"voiceModelJob\":" + voiceModelJob() +
                   ",\"voices\":" + voicesJson() + "}");
+    } else if (req.method == "POST" && req.path == "/warm") {
+      // The plugin asks as soon as it wakes, so that the model loads while the
+      // user is still reaching for the microphone. Answers at once.
+      std::thread([] {
+        try {
+          if (pack::ready() && !packBusy()) loadEngine();
+        } catch (const std::exception& ex) {
+          platform::log(std::string("warm-up failed: ") + ex.what());
+        }
+      }).detach();
+      respond(s, 200, "{\"warming\":true}");
     } else if (req.method == "POST" && req.path == "/dictate") {
       if (packBusy())
         respond(s, 503, errorBody("pack_installing", "the voice pack is being installed"));
@@ -617,16 +630,19 @@ void idleLoop() {
   while (!quitting) {
     for (int i = 0; i < (first ? 20 : 150) && !quitting; i++) platform::sleepMs(100);
     first = false;
-    bool unloaded = false;
+    bool unloaded = false, idleEmpty = false;
     {
       std::lock_guard<std::mutex> lock(engineMu);
       if (engine && !active && std::chrono::steady_clock::now() - lastUse > kUnloadAfter) {
         engine.reset();
         unloaded = true;
       }
+      idleEmpty = !engine;
     }
     if (unloaded) platform::log("engine unloaded");
-    if (!active) platform::trimMemory();
+    // Trimming the working set also evicts the loaded model and the mapped
+    // language model, which then page back in from disk on the next dictation.
+    if (!active && idleEmpty) platform::trimMemory();
   }
 }
 
@@ -648,12 +664,42 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
                           const std::function<void(const std::vector<voice::LiveUpdate>&)>& sink,
                           const std::function<bool()>& alive, const std::function<void()>& onReady,
                           std::chrono::seconds maxDuration, AutoEnd autoEnd) {
+  using Clock = std::chrono::steady_clock;
+  const auto ms = [](Clock::time_point a, Clock::time_point b) {
+    return long(std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count());
+  };
+  const auto opened = Clock::now();
   Engine& e = loadEngine();
+  const long loadMs = ms(opened, Clock::now());
   voice::LiveTranscriber live(*e.model, *e.decoder, hotwords, context, e.rescorer.get());
   onReady();
-  const auto started = std::chrono::steady_clock::now();
+  const auto started = Clock::now();
   auto lastUpdate = started;
   bool heard = false, sentenceDone = false;
+  // Timing of the live path, one summary line per dictation in service.log:
+  // where a slow one lost its time (engine load, a long decode, a final pass).
+  long firstTextMs = -1, decodeMax = 0, finalMax = 0;
+  int slowDecodes = 0, finals = 0;
+  auto timed = [&](auto&& decode) {
+    const auto t = Clock::now();
+    auto ups = decode();
+    const long d = ms(t, Clock::now());
+    decodeMax = std::max(decodeMax, d);
+    if (d > 250) slowDecodes++;  // longer than the draft interval: the mic backs up
+    if (!ups.empty() && firstTextMs < 0) firstTextMs = ms(started, Clock::now());
+    if (!ups.empty() && ups.back().isFinal) {
+      finals++;
+      finalMax = std::max(finalMax, d);
+    }
+    return ups;
+  };
+  auto summary = [&](const std::string& why) {
+    platform::log("dictation: load " + std::to_string(loadMs) + " ms, first text " +
+                  std::to_string(firstTextMs) + " ms, sentences " + std::to_string(finals) +
+                  ", slowest decode " + std::to_string(decodeMax) + " ms, final pass max " +
+                  std::to_string(finalMax) + " ms, decodes over 250 ms " +
+                  std::to_string(slowDecodes) + ", ended " + why);
+  };
   auto take = [&](const std::vector<voice::LiveUpdate>& ups) {
     if (!ups.empty()) {
       lastUpdate = std::chrono::steady_clock::now();
@@ -664,7 +710,10 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
   };
   std::string reason = "stopped";
   while (true) {
-    if (cancelRequested) return "cancelled";
+    if (cancelRequested) {
+      summary("cancelled");
+      return "cancelled";
+    }
     if (stopRequested) break;
     const auto now = std::chrono::steady_clock::now();
     if (now - started > maxDuration) {
@@ -679,13 +728,21 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
       reason = "no_speech";
       break;
     }
-    if (!alive()) return "gone";
+    if (!alive()) {
+      summary("gone");
+      return "gone";
+    }
     mic.wait(50);
-    mic.drain([&](const std::vector<float>& pcm) { take(live.add(pcm.data(), pcm.size())); });
+    mic.drain([&](const std::vector<float>& pcm) {
+      take(timed([&] { return live.add(pcm.data(), pcm.size()); }));
+    });
   }
   mic.stop();
-  mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); }, false);
-  sink(live.finish());
+  mic.drain([&](const std::vector<float>& pcm) {
+    sink(timed([&] { return live.add(pcm.data(), pcm.size()); }));
+  }, false);
+  sink(timed([&] { return live.finish(); }));
+  summary(reason);
   return reason;
 }
 

@@ -83,6 +83,15 @@ async function serviceCall(path, method) {
   return last;
 }
 
+/**
+ * Loads the recognition model while the plugin starts (it takes 1-4 s after
+ * a pause). An older service answers 404 and a missing one is explained later
+ * by readyToDictate, so failures are ignored here.
+ */
+function warmService() {
+  serviceCall('/warm', 'POST').catch(() => {});
+}
+
 async function serviceStatus() {
   const st = await serviceCall('/status', 'GET');
   if (!st || st.service !== 'otzaria-voice') throw new ServiceError('unreachable', 'no service');
