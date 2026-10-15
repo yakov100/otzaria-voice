@@ -20,6 +20,13 @@ const pack::Release kRelease = {
     "3a757b8888699a48661bb1b43096bf5cf00035b6b23d8e3fdf4152d5b4c2af06",
 };
 
+const pack::Release kLexicon = {
+    1,
+    "https://github.com/yakov100/otzaria-voice/releases/download/voice-model-v1/nikud_lexicon-v1.zip",
+    1230701,
+    "fbea9a7537bd5cab387d4c0068bde48f1752de18221e016554a057e1444fe7fe",
+};
+
 namespace fs = std::filesystem;
 using platform::Path;
 
@@ -32,6 +39,37 @@ const char* const kRequired[] = {
 std::mutex mu;
 pack::Progress current;
 std::atomic<bool> running{false};
+std::atomic<bool> lexiconRunning{false};
+
+/** Downloads, verifies and unpacks the lexicon into the pack (throws). */
+void installLexicon() {
+  const pack::Release& r = kLexicon;
+  auto override = platform::env("OTZARIA_NIKUD_LEXICON_URL");
+  const std::string url = override.empty() ? r.url : override;
+  const Path target = narrator::lexiconPath();
+  const Path base = narrator::modelDir().parent_path();
+  const Path work = base / "download";
+  const Path part = work / ("nikud-lexicon-v" + std::to_string(r.version) + ".zip.part");
+  const Path staging = base / "lexicon.new";
+  std::error_code ec;
+  fs::create_directories(work, ec);
+  platform::log("nikud lexicon: downloading " + url);
+  pack::sys::download(url, part, r.size, [](uint64_t) {});
+  if (pack::sys::hashFile(part, [](uint64_t) {}) != r.sha256) {
+    fs::remove(part, ec);
+    throw std::runtime_error("the downloaded lexicon is corrupt");
+  }
+  fs::remove_all(staging, ec);
+  fs::create_directories(staging, ec);
+  pack::sys::extract(part, staging);
+  const Path file = staging / target.filename();
+  if (!fs::exists(file)) throw std::runtime_error("the lexicon zip holds no lexicon");
+  fs::remove(target, ec);
+  fs::rename(file, target);
+  fs::remove_all(staging, ec);
+  fs::remove(part, ec);
+  platform::log("nikud lexicon: installed version " + std::to_string(r.version));
+}
 
 void set(const char* state, uint64_t received, uint64_t total, const std::string& error = "") {
   std::lock_guard<std::mutex> lock(mu);
@@ -82,6 +120,13 @@ void run(std::function<void()> release) {
     fs::remove(part, ec);
     platform::log("voice model: installed version " + std::to_string(r.version));
     set("done", r.size, r.size);
+    // The lexicon is a separate, small download, so that the pack need not
+    // be fetched again when the lexicon changes.
+    try {
+      installLexicon();
+    } catch (const std::exception& e) {
+      platform::log(std::string("nikud lexicon: ") + e.what());
+    }
   } catch (const std::exception& e) {
     platform::log(std::string("voice model: ") + e.what());
     std::error_code ec;
@@ -112,6 +157,19 @@ void startInstall(std::function<void()> release) {
   if (running.exchange(true)) return;
   set("downloading", 0, kRelease.size);
   std::thread(run, std::move(release)).detach();
+}
+
+void ensureLexicon() {
+  if (!narrator::modelReady() || narrator::lexiconReady() || running) return;
+  if (lexiconRunning.exchange(true)) return;
+  std::thread([] {
+    try {
+      installLexicon();
+    } catch (const std::exception& e) {
+      platform::log(std::string("nikud lexicon: ") + e.what());
+    }
+    lexiconRunning = false;
+  }).detach();
 }
 
 uint64_t removeInstalled() {

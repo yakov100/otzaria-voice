@@ -15,6 +15,9 @@
 //   embed_tokens.onnx(.data)     text and speech token embeddings
 //   language_model.onnx(.data)   the 0.5B model, 4-bit weights
 //   decoder.onnx(.data)          speech tokens -> audio, one step, int8
+//   nikud_lexicon.bin            (optional) vocalized Talmudic words, see
+//                                nikud_lexicon.h; without it the diacritizer
+//                                alone vocalizes, and reads Aramaic poorly
 // A voice is a small .otzvoice file (see Voice) made once from a recording.
 #pragma once
 
@@ -56,6 +59,9 @@ struct Voice {
 platform::Path modelDir();
 platform::Path voicesDir();
 bool modelReady();
+// The lexicon file in the pack, and whether it is there.
+platform::Path lexiconPath();
+bool lexiconReady();
 // The voices installed, by file name without ".otzvoice" (sorted, unique).
 std::vector<std::string> installedVoices();
 // The file of voice [id] (the computer's own voices first); empty if none.
@@ -76,7 +82,10 @@ class Narrator {
   Narrator(const Narrator&) = delete;
   Narrator& operator=(const Narrator&) = delete;
 
-  // Adds nikud to text that has none; vocalized text is returned unchanged.
+  // Adds nikud to the words that have none: from the lexicon when it knows
+  // the word (after the word before it), else from the diacritizer, which
+  // reads the whole text (in windows of about 2000 characters) for context.
+  // Words already vocalized are kept as they are.
   std::string vocalize(const std::string& text);
 
   // Speaks one piece (vocalize it first) in [voice]: 24 kHz mono samples.
@@ -90,12 +99,34 @@ class Narrator {
                                 const std::function<bool()>& cancelled);
   std::vector<float> decode(const std::vector<int64_t>& tokens, const Voice& voice);
 
-  // Speaks every piece in order, generating the next piece's tokens while a
+  // The audio of several pieces in one decoder call, one result per piece
+  // (in order). Rows are padded on the right to the longest, each with its
+  // own last token, and the padding's audio is cut off (960 samples a
+  // token). One piece goes through decode unchanged. On a processor this
+  // is no faster than one piece at a time (see decodeBatched in the .cpp),
+  // and the pack's decoder.onnx takes one row only until re-exported.
+  std::vector<std::vector<float>> decodeBatch(const std::vector<std::vector<int64_t>>& pieces,
+                                              const Voice& voice);
+
+  // Speech tokens for several pieces at once, one result per piece. A step
+  // of the language model reads all its weights once however many rows it
+  // has, so on a processor a batch of pieces costs little more than one.
+  // [onProgress] gets the share of the batch's steps done so far (0..1).
+  // Empty when cancelled.
+  std::vector<std::vector<int64_t>> generateBatch(const std::vector<std::string>& vocalized,
+                                                  const Voice& voice,
+                                                  const std::function<bool()>& cancelled,
+                                                  const std::function<void(double)>& onProgress = {});
+
+  // Speaks every piece in order, generating the next batch of pieces while a
   // second thread decodes the previous one. [onAudio] receives each piece's
-  // samples in order (from the decoding thread). Returns false if cancelled.
+  // samples in order (from the decoding thread). [onProgress], if given, is
+  // told how far generation is: pieces [first, first+count) are the batch in
+  // flight, [fraction] of it done. Returns false if cancelled.
   bool speakAll(const std::vector<std::string>& pieces, const Voice& voice,
                 const std::function<bool()>& cancelled,
-                const std::function<void(size_t piece, std::vector<float> audio)>& onAudio);
+                const std::function<void(size_t piece, std::vector<float> audio)>& onAudio,
+                const std::function<void(size_t first, size_t count, double fraction)>& onProgress = {});
 
   // Exposed for tests: the token ids the models receive.
   std::vector<int64_t> textTokens(const std::string& vocalized) const;

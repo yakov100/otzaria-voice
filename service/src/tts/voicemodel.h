@@ -14,9 +14,17 @@ namespace voicemodel {
 
 // The pack this service version installs (tools/make_voice_model.py).
 extern const pack::Release kRelease;
+// The nikud lexicon (tools/tts/build_nikud_lexicon.py), a small zip holding
+// nikud_lexicon.bin, which goes into the pack beside the models.
+extern const pack::Release kLexicon;
 
 bool ready();             // every required file present (narrator::modelReady)
 int installedVersion();   // 0 when none
+
+// Fetches the lexicon into the pack, quietly in the background, when the
+// pack is installed and the lexicon is not (at start-up and after an
+// install). Fails silently: the narrator works without it.
+void ensureLexicon();
 
 pack::Progress progress();
 

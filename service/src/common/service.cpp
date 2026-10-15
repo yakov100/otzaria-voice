@@ -48,7 +48,7 @@
 
 namespace service {
 
-const char* kVersion = "2.2.1";
+const char* kVersion = "2.3.0";
 
 namespace {
 
@@ -545,6 +545,7 @@ void handle(Socket s) {
                   ",\"speak\":" + (speech::supported() ? "true" : "false") + ",\"voiceModel\":" +
                   (narrator::modelReady() ? "true" : "false") + ",\"voiceModelSize\":" +
                   std::to_string(voicemodel::kRelease.size) + ",\"voiceModelJob\":" + voiceModelJob() +
+                  ",\"lexicon\":" + (narrator::lexiconReady() ? "true" : "false") +
                   ",\"voices\":" + voicesJson() + "}");
     } else if (req.method == "POST" && req.path == "/warm") {
       // The plugin asks as soon as it wakes, so that the model loads while the
@@ -788,6 +789,8 @@ int serve() {
   }
   platform::log(std::string("service ") + kVersion + " (" + kPlatform +
                 ") listening on 127.0.0.1:" + std::to_string(port()));
+  // A pack installed before the lexicon existed gets it now (1.2MB, quiet).
+  voicemodel::ensureLexicon();
   std::thread idle(idleLoop);
   platform::trimMemory();
   while (!quitting) {
@@ -988,6 +991,20 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
     writeWav16(outDir / name, all, narrator::kSampleRate);
   }
   fclose(report);
+  return 0;
+}
+
+int vocalizeTest(const platform::Path& models, const platform::Path& text, const platform::Path& out) {
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
+  narrator::Narrator n(ort, models, 4, 1);
+  std::ifstream in(text, std::ios::binary);
+  std::ofstream o(out, std::ios::binary);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    o << (util::trim(line).empty() ? line : n.vocalize(line)) << '\n';
+  }
   return 0;
 }
 

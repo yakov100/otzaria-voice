@@ -1,6 +1,7 @@
 #include "narrator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -16,6 +17,7 @@
 
 #include "../../third_party/onnxruntime_c_api.h"
 #include "json.h"
+#include "nikud_lexicon.h"
 
 namespace narrator {
 
@@ -83,14 +85,10 @@ std::string readFile(const Path& path) {
   return ss.str();
 }
 
-// The Phonikud/Dicta output classes (BertForDiacritization).
-const char32_t* const kNikudClasses[] = {
-    U"", U"<MAT_LECT>", U"ּ", U"ְ", U"ֱ", U"ֲ", U"ֳ", U"ִ",
-    U"ֵ", U"ֶ", U"ַ", U"ָ", U"ֹ", U"ֺ", U"ֻ",
-    U"ְּ", U"ֱּ", U"ֲּ", U"ֳּ", U"ִּ",
-    U"ֵּ", U"ֶּ", U"ַּ", U"ָּ", U"ֹּ",
-    U"ֺּ", U"ֻּ", U"ׇ", U"ׇּ"};
-constexpr int kNikudClassCount = 29;
+// The diacritizer (BertForDiacritization) gives one of nikud::kClasses per
+// letter; class 1 (mater lectionis) means no mark. It takes 2048 tokens, so
+// text goes in windows of this many characters, cut at a space.
+constexpr size_t kNakdanWindow = 2000;
 
 // Chatterbox text/speech token ids.
 constexpr int64_t kStop = 0, kUnk = 1, kSpace = 2, kStart = 255, kHebrew = 2110;
@@ -102,6 +100,26 @@ constexpr int kMaxSpeechTokens = 1000;  // 40 seconds; a piece is far shorter
 // 2.0, the original Chatterbox Multilingual setting, read all six through.
 constexpr float kRepetitionPenalty = 2.0f;
 constexpr float kExaggerationValue = 0.5f;
+// Pieces generated together (generateBatch). The first batch is small so
+// that the first sentence is heard soon; the later ones fill the batch.
+// OTZARIA_NARRATOR_BATCH overrides the size (evaluation only).
+constexpr size_t kFirstBatch = 2;
+size_t batchSize() {
+  const auto e = platform::env("OTZARIA_NARRATOR_BATCH");
+  const int n = e.empty() ? 0 : atoi(e.c_str());
+  return n > 0 ? size_t(std::min(n, 16)) : 6;
+}
+bool timing() { return !platform::env("OTZARIA_NARRATOR_TIMING").empty(); }
+// Pieces decoded in one call by speakAll's decoder thread. One, because the
+// decoder gains nothing from a batch on a processor: it is compute bound
+// (about 28 ms a token at 6 threads, no per-call cost to share), so a batch
+// costs the sum of its rows plus the padding to the longest (a third more
+// on a batch of 6 measured 2026-10-15; grouping rows by length did not help
+// either). Also, the decoder.onnx in the pack tiles its mask by the batch
+// size once too often, so it fails on a batch of two until re-exported.
+// OTZARIA_NARRATOR_DECODE_BATCH=1 decodes a whole batch at once (evaluation
+// only, with a fixed decoder).
+bool decodeBatched() { return platform::env("OTZARIA_NARRATOR_DECODE_BATCH") == "1"; }
 
 }  // namespace
 
@@ -179,6 +197,13 @@ bool modelReady() {
                         "language_model.onnx", "decoder.onnx"})
     if (!std::filesystem::exists(d / f, ec)) return false;
   return true;
+}
+
+Path lexiconPath() { return modelDir() / "nikud_lexicon.bin"; }
+
+bool lexiconReady() {
+  std::error_code ec;
+  return std::filesystem::exists(lexiconPath(), ec);
 }
 
 std::vector<std::string> installedVoices() {
@@ -268,6 +293,7 @@ struct Narrator::Impl {
   int64_t nakdanCls = 0, nakdanSep = 0, nakdanUnk = 0;
   std::unordered_map<std::u32string, int64_t> textVocab;
   std::map<std::pair<std::u32string, std::u32string>, int> merges;  // pair -> rank
+  nikud::Lexicon lexicon;  // empty without nikud_lexicon.bin
 
   void check(OrtStatus* s) {
     if (!s) return;
@@ -403,6 +429,9 @@ Narrator::Narrator(const Path& ortLibrary, const Path& modelDir, int lmThreads, 
     }
   }
 
+  if (o.lexicon.load(modelDir / "nikud_lexicon.bin"))
+    platform::log("nikud lexicon: " + std::to_string(o.lexicon.words()) + " words, " +
+                  std::to_string(o.lexicon.bigrams()) + " pairs");
   o.nakdan = o.open(modelDir / "nakdan.onnx", lmThreads);
   o.embed = o.open(modelDir / "embed_tokens.onnx", lmThreads);
   o.lm = o.open(modelDir / "language_model.onnx", lmThreads);
@@ -479,46 +508,120 @@ std::vector<int64_t> Narrator::textTokens(const std::string& vocalized) const {
 // ---------------------------------------------------------------- nikud
 
 std::string Narrator::vocalize(const std::string& text) {
-  std::u32string s = toU32(text);
-  if (std::any_of(s.begin(), s.end(), isNikud)) return text;
-  // The model sees the letters only.
-  std::u32string plain;
-  for (char32_t c : s)
-    if (!(c >= 0x0590 && c <= 0x05C7) && c != '|') plain.push_back(c);
-  if (plain.size() > 2046) plain.resize(2046);
   auto& o = *impl_;
-  std::vector<int64_t> ids = nakdanTokens(plain);
-  std::vector<int64_t> mask(ids.size(), 1), types(ids.size(), 0);
-  const std::vector<int64_t> shape{1, int64_t(ids.size())};
-  std::vector<OrtValue*> in{o.tensor(ids.data(), ids.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
-                            o.tensor(mask.data(), mask.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
-                            o.tensor(types.data(), types.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)};
-  std::vector<OrtValue*> out;
-  struct Guard {
-    Impl& o;
-    std::vector<OrtValue*>& a;
-    std::vector<OrtValue*>& b;
-    ~Guard() {
-      o.release(a);
-      o.release(b);
+  const std::u32string s = toU32(text);
+
+  // The model sees the letters only: [plain] is s without marks (and without
+  // '|', which the tokenizer has no token for); plainAt maps s into it.
+  std::u32string plain;
+  std::vector<size_t> plainAt(s.size(), 0);
+  for (size_t i = 0; i < s.size(); i++) {
+    plainAt[i] = plain.size();
+    const char32_t c = s[i];
+    if (!(c >= 0x0590 && c <= 0x05C7) && c != '|') plain.push_back(c);
+  }
+
+  // The words (runs of letters and marks): kept when vocalized already,
+  // else the lexicon's pattern, else the model's classes.
+  struct Word {
+    size_t from, to;
+    bool keep;
+    const std::string* pattern;
+    std::u32string letters;
+  };
+  std::vector<Word> words;
+  std::u32string prev;
+  bool needModel = false;
+  for (size_t i = 0; i < s.size();) {
+    if (!isHebrewLetter(s[i])) {
+      i++;
+      continue;
     }
-  } guard{o, in, out};
-  out = o.run(o.nakdan, {"input_ids", "attention_mask", "token_type_ids"}, in, {"nikud_logits", "shin_logits"});
-  const float* nikud = o.dataOf<float>(out[0]);
-  const float* shin = o.dataOf<float>(out[1]);
+    Word w{i, i, false, nullptr, {}};
+    while (i < s.size() && (isHebrewLetter(s[i]) || (s[i] >= 0x0590 && s[i] <= 0x05C7))) {
+      if (isHebrewLetter(s[i])) w.letters.push_back(s[i]);
+      else if (isNikud(s[i])) w.keep = true;
+      i++;
+    }
+    w.to = i;
+    if (!w.keep) {
+      w.pattern = o.lexicon.find(prev, w.letters);
+      if (!w.pattern) needModel = true;
+    }
+    prev = w.letters;
+    words.push_back(w);
+  }
+  if (words.empty()) return text;
+
+  // The model's class (and kSin for a sin dot) for each character of plain.
+  std::vector<unsigned char> classes(plain.size(), 0);
+  auto runModel = [&](size_t from, size_t to) {
+    std::vector<int64_t> ids = nakdanTokens(plain.substr(from, to - from));
+    std::vector<int64_t> mask(ids.size(), 1), types(ids.size(), 0);
+    const std::vector<int64_t> shape{1, int64_t(ids.size())};
+    std::vector<OrtValue*> in{o.tensor(ids.data(), ids.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+                              o.tensor(mask.data(), mask.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+                              o.tensor(types.data(), types.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)};
+    std::vector<OrtValue*> out;
+    struct Guard {
+      Impl& o;
+      std::vector<OrtValue*>& a;
+      std::vector<OrtValue*>& b;
+      ~Guard() {
+        o.release(a);
+        o.release(b);
+      }
+    } guard{o, in, out};
+    out = o.run(o.nakdan, {"input_ids", "attention_mask", "token_type_ids"}, in, {"nikud_logits", "shin_logits"});
+    const float* nikud = o.dataOf<float>(out[0]);
+    const float* shin = o.dataOf<float>(out[1]);
+    for (size_t i = from; i < to; i++) {
+      if (!isHebrewLetter(plain[i])) continue;
+      const size_t tok = i - from + 1;  // after [CLS]
+      const float* row = nikud + tok * nikud::kClassCount;
+      const int cls = int(std::max_element(row, row + nikud::kClassCount) - row);
+      classes[i] = (unsigned char)cls | (shin[tok * 2 + 1] > shin[tok * 2] ? nikud::kSin : 0);
+    }
+  };
+  if (needModel) {
+    for (size_t from = 0; from < plain.size();) {
+      size_t to = std::min(plain.size(), from + kNakdanWindow);
+      if (to < plain.size()) {
+        const auto sp = plain.rfind(U' ', to);
+        if (sp != std::u32string::npos && sp > from + kNakdanWindow / 2) to = sp;
+      }
+      runModel(from, to);
+      from = to;
+    }
+  }
 
   std::u32string result;
-  for (size_t i = 0; i < plain.size(); i++) {
-    const char32_t c = plain[i];
-    result.push_back(c);
-    if (!isHebrewLetter(c)) continue;
-    const size_t tok = i + 1;  // after [CLS]
-    const float* row = nikud + tok * kNikudClassCount;
-    const int cls = int(std::max_element(row, row + kNikudClassCount) - row);
-    if (c == U'ש') result.push_back(shin[tok * 2 + 1] > shin[tok * 2] ? 0x05C2 : 0x05C1);
-    if (cls == 1) continue;  // mater lectionis: the letter is read as a vowel, no mark
-    result += kNikudClasses[cls];
+  size_t at = 0;
+  auto copy = [&](size_t from, size_t to) {
+    for (size_t i = from; i < to; i++)
+      if (s[i] != '|') result.push_back(s[i]);
+  };
+  for (const Word& w : words) {
+    copy(at, w.from);
+    if (w.keep) {
+      copy(w.from, w.to);
+    } else if (w.pattern) {
+      result += nikud::apply(w.letters, *w.pattern);
+    } else {
+      for (size_t i = w.from; i < w.to; i++) {
+        const char32_t c = s[i];
+        if (!isHebrewLetter(c)) continue;  // teamim on an unvocalized word: dropped
+        result.push_back(c);
+        const unsigned char p = classes[plainAt[i]];
+        if (c == U'ש') result.push_back(p & nikud::kSin ? 0x05C2 : 0x05C1);
+        const int cls = p & 0x1F;
+        if (cls == 1) continue;  // mater lectionis: the letter is read as a vowel, no mark
+        result += nikud::kClasses[cls];
+      }
+    }
+    at = w.to;
   }
+  copy(at, s.size());
   return encode(result);
 }
 
@@ -533,26 +636,49 @@ std::vector<float> Narrator::speak(const std::string& vocalized, const Voice& vo
 
 bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voice,
                         const std::function<bool()>& cancelled,
-                        const std::function<void(size_t, std::vector<float>)>& onAudio) {
+                        const std::function<void(size_t, std::vector<float>)>& onAudio,
+                        const std::function<void(size_t, size_t, double)>& onProgress) {
   std::mutex mu;
   std::condition_variable cv;
   std::deque<std::pair<size_t, std::vector<int64_t>>> queue;
   bool finished = false;
   std::exception_ptr failure;
+  const size_t kBatch = batchSize();
+  const size_t decodeAtOnce = decodeBatched() ? kBatch : 1;
   std::thread decoderThread([&] {
     try {
       while (true) {
-        std::pair<size_t, std::vector<int64_t>> job;
+        // The pieces waiting, one as a rule (see decodeBatched), in one call.
+        std::vector<size_t> ids;
+        std::vector<std::vector<int64_t>> tokens;
         {
           std::unique_lock<std::mutex> lock(mu);
           cv.wait(lock, [&] { return !queue.empty() || finished; });
           if (queue.empty()) return;
-          job = std::move(queue.front());
-          queue.pop_front();
+          while (!queue.empty() && ids.size() < decodeAtOnce) {
+            ids.push_back(queue.front().first);
+            tokens.push_back(std::move(queue.front().second));
+            queue.pop_front();
+          }
         }
         cv.notify_all();
         if (cancelled()) continue;
-        onAudio(job.first, decode(job.second, voice));
+        // The batch's pieces enter the queue in order, so the audio is too.
+        const auto t0 = std::chrono::steady_clock::now();
+        auto audio = decodeBatch(tokens, voice);
+        if (timing()) {
+          size_t n = 0, longest = 0;
+          for (const auto& t : tokens) {
+            n += t.size();
+            longest = std::max(longest, t.size());
+          }
+          const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
+          platform::log(ids.size() == 1 ? "decode " + std::to_string(n) + " tokens in " + std::to_string(ms.count()) + " ms"
+                                        : "decode " + std::to_string(ids.size()) + " pieces, " + std::to_string(n) +
+                                              " tokens (" + std::to_string(longest * ids.size()) + " padded) in " +
+                                              std::to_string(ms.count()) + " ms");
+        }
+        for (size_t k = 0; k < ids.size(); k++) onAudio(ids[k], std::move(audio[k]));
       }
     } catch (...) {
       std::lock_guard<std::mutex> lock(mu);
@@ -560,13 +686,45 @@ bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voi
     }
   });
   try {
-    for (size_t i = 0; i < pieces.size() && !cancelled(); i++) {
-      auto tokens = generate(vocalize(pieces[i]), voice, cancelled);
+    size_t next = 0;
+    for (size_t batch = std::min(kFirstBatch, kBatch); next < pieces.size() && !cancelled(); batch = kBatch) {
+      const size_t count = std::min(batch, pieces.size() - next);
+      // The batch's pieces are vocalized together, so that the diacritizer
+      // sees the sentences around each one (pieces hold no line breaks).
+      std::string joined;
+      for (size_t k = 0; k < count; k++) joined += (k ? "\n" : "") + pieces[next + k];
+      const auto t0 = std::chrono::steady_clock::now();
+      std::vector<std::string> vocalized;
+      {
+        std::stringstream ss(vocalize(joined));
+        std::string line;
+        while (std::getline(ss, line)) vocalized.push_back(line);
+      }
+      if (vocalized.size() != count) {
+        vocalized.clear();
+        for (size_t k = 0; k < count; k++) vocalized.push_back(vocalize(pieces[next + k]));
+      }
+      const auto t1 = std::chrono::steady_clock::now();
+      auto tokens = generateBatch(vocalized, voice, cancelled, [&](double fraction) {
+        if (onProgress) onProgress(next, count, fraction);
+      });
+      if (tokens.size() != count) break;  // cancelled
+      if (timing()) {
+        size_t n = 0;
+        for (const auto& t : tokens) n += t.size();
+        const auto t2 = std::chrono::steady_clock::now();
+        platform::log("batch of " + std::to_string(count) + ": nikud " +
+                      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()) +
+                      " ms, " + std::to_string(n) + " tokens in " +
+                      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()) + " ms");
+      }
       std::unique_lock<std::mutex> lock(mu);
       if (failure) break;
-      // At most one piece waits: the generator stays a piece ahead, no more.
-      cv.wait(lock, [&] { return queue.empty() || failure; });
-      queue.emplace_back(i, std::move(tokens));
+      // The decoder keeps up with about a batch; the generator waits rather
+      // than running far ahead, so a cancel is felt soon.
+      cv.wait(lock, [&] { return queue.size() <= kBatch || failure; });
+      for (size_t k = 0; k < count; k++) queue.emplace_back(next + k, std::move(tokens[k]));
+      next += count;
       cv.notify_all();
     }
   } catch (...) {
@@ -585,12 +743,42 @@ bool Narrator::speakAll(const std::vector<std::string>& pieces, const Voice& voi
 
 std::vector<int64_t> Narrator::generate(const std::string& vocalized, const Voice& voice,
                                         const std::function<bool()>& cancelled) {
+  auto out = generateBatch({vocalized}, voice, cancelled);
+  return out.empty() ? std::vector<int64_t>{} : std::move(out[0]);
+}
+
+std::vector<std::vector<int64_t>> Narrator::generateBatch(const std::vector<std::string>& vocalized,
+                                                          const Voice& voice,
+                                                          const std::function<bool()>& cancelled,
+                                                          const std::function<void(double)>& onProgress) {
   auto& o = *impl_;
-  std::vector<int64_t> ids = textTokens(vocalized);
-  const int64_t textLen = int64_t(ids.size());
-  std::vector<int64_t> pos(ids.size());
-  for (size_t i = 0; i < ids.size(); i++) pos[i] = ids[i] >= kStartSpeech ? 0 : int64_t(i) - 1;
-  float exaggeration = kExaggerationValue;
+  const size_t rows = vocalized.size();
+  if (rows == 0) return {};
+  const int64_t batch = int64_t(rows);
+
+  // Every row: the voice's conditioning, then its text. Rows are padded on
+  // the right to the longest; the language model's attention takes each
+  // row's length from the count of ones in its mask (seqlens_k), and later
+  // tokens are written right after that row's real tokens, over the padding.
+  std::vector<std::vector<int64_t>> ids(rows);
+  std::vector<int64_t> rowLen(rows);
+  std::vector<int> maxTokens(rows);
+  int64_t maxLen = 0;
+  int maxSteps = 0, expectedSteps = 1;  // the limit, and the likely length (for progress)
+  for (size_t b = 0; b < rows; b++) {
+    ids[b] = textTokens(vocalized[b]);
+    rowLen[b] = voice.condLen + int64_t(ids[b].size());
+    maxLen = std::max(maxLen, rowLen[b]);
+    // A sentence is read at roughly 12 letters a second; text the model does
+    // not understand can make it talk on past the sentence, so stop at about
+    // twice the expected length (25 tokens a second).
+    int letters = 0;
+    for (char32_t c : toU32(vocalized[b]))
+      if (!isNikud(c) && !isSpace(c) && !(c >= 0x0591 && c <= 0x05AF)) letters++;
+    maxTokens[b] = std::min(kMaxSpeechTokens, 75 + letters * 4);
+    maxSteps = std::max(maxSteps, maxTokens[b]);
+    expectedSteps = std::max(expectedSteps, std::min(maxTokens[b], 25 + letters * 2));
+  }
 
   std::vector<OrtValue*> past(2 * kLayers, nullptr), step, embedOut;
   struct Guard {
@@ -604,14 +792,16 @@ std::vector<int64_t> Narrator::generate(const std::string& vocalized, const Voic
       o.release(c);
     }
   } guard{o, past, step, embedOut};
-  for (auto& p : past) p = o.emptyTensor({1, kKvHeads, 0, kHeadDim});
+  for (auto& p : past) p = o.emptyTensor({batch, kKvHeads, 0, kHeadDim});
 
-  auto embedTokens = [&](std::vector<int64_t>& tokenIds, std::vector<int64_t>& positions) {
-    const std::vector<int64_t> shape{1, int64_t(tokenIds.size())};
+  // Embeds [count] tokens for each of [n] rows (the same count per row).
+  auto embedTokens = [&](std::vector<int64_t>& tokenIds, std::vector<int64_t>& positions, int64_t n) {
+    std::vector<float> exaggeration(size_t(n), kExaggerationValue);
+    const std::vector<int64_t> shape{n, int64_t(tokenIds.size()) / n};
     std::vector<OrtValue*> in{
         o.tensor(tokenIds.data(), tokenIds.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
         o.tensor(positions.data(), positions.size(), shape, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
-        o.tensor(&exaggeration, 1, {1}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
+        o.tensor(exaggeration.data(), exaggeration.size(), {n}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
     o.release(embedOut);
     try {
       embedOut = o.run(o.embed, {"input_ids", "position_ids", "exaggeration"}, in, {"inputs_embeds"});
@@ -623,31 +813,30 @@ std::vector<int64_t> Narrator::generate(const std::string& vocalized, const Voic
     return o.dataOf<float>(embedOut[0]);
   };
 
-  // First step: the voice's conditioning, then the text.
-  std::vector<float> inputs(voice.condEmb);
-  {
-    const float* text = embedTokens(ids, pos);
-    inputs.insert(inputs.end(), text, text + size_t(textLen) * kHidden);
+  // First step: [batch, maxLen, hidden], zero past the row's end.
+  std::vector<float> inputs(size_t(batch * maxLen) * kHidden, 0.0f);
+  std::vector<int64_t> mask(size_t(batch * maxLen), 0);
+  for (size_t b = 0; b < rows; b++) {
+    float* row = inputs.data() + size_t(b) * size_t(maxLen) * kHidden;
+    std::copy(voice.condEmb.begin(), voice.condEmb.end(), row);
+    std::vector<int64_t> pos(ids[b].size());
+    for (size_t i = 0; i < pos.size(); i++) pos[i] = ids[b][i] >= kStartSpeech ? 0 : int64_t(i) - 1;
+    const float* text = embedTokens(ids[b], pos, 1);
+    std::copy(text, text + ids[b].size() * kHidden, row + size_t(voice.condLen) * kHidden);
+    std::fill(mask.begin() + long(b * size_t(maxLen)), mask.begin() + long(b * size_t(maxLen) + size_t(rowLen[b])), 1);
   }
-  int64_t seqLen = voice.condLen + textLen;
-  std::vector<int64_t> mask(size_t(seqLen), 1);
-  std::vector<int64_t> generated{kStartSpeech};
-  bool stopped = false;
+  int64_t inLen = maxLen;
+  int64_t maskLen = maxLen;
 
-  // A sentence is read at roughly 12 letters a second; text the model does
-  // not understand can make it talk on past the sentence, so stop at about
-  // twice the expected length (25 tokens a second).
-  int letters = 0;
-  for (char32_t c : toU32(vocalized))
-    if (!isNikud(c) && !isSpace(c) && !(c >= 0x0591 && c <= 0x05AF)) letters++;
-  const int maxTokens = std::min(kMaxSpeechTokens, 75 + letters * 4);
+  std::vector<std::vector<int64_t>> generated(rows, std::vector<int64_t>{kStartSpeech});
+  std::vector<bool> stopped(rows, false), done(rows, false);
+  size_t remaining = rows;
 
-  for (int i = 0; i < maxTokens; i++) {
+  for (int i = 0; i < maxSteps && remaining > 0; i++) {
     if (cancelled()) return {};
-    const int64_t inLen = int64_t(inputs.size() / kHidden);
     std::vector<OrtValue*> in;
-    in.push_back(o.tensor(inputs.data(), inputs.size(), {1, inLen, kHidden}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT));
-    in.push_back(o.tensor(mask.data(), mask.size(), {1, int64_t(mask.size())}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64));
+    in.push_back(o.tensor(inputs.data(), inputs.size(), {batch, inLen, kHidden}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT));
+    in.push_back(o.tensor(mask.data(), mask.size(), {batch, maskLen}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64));
     for (auto* p : past) in.push_back(p);
     o.release(step);
     try {
@@ -667,37 +856,67 @@ std::vector<int64_t> Narrator::generate(const std::string& vocalized, const Voic
     }
     const auto shape = o.shapeOf(step[0]);
     const int64_t vocab = shape[2];
-    std::vector<float> logits(o.dataOf<float>(step[0]) + (shape[1] - 1) * vocab,
-                              o.dataOf<float>(step[0]) + shape[1] * vocab);
-    std::vector<int64_t> seen(generated);
-    std::sort(seen.begin(), seen.end());
-    seen.erase(std::unique(seen.begin(), seen.end()), seen.end());
-    for (int64_t t : seen) {
-      float& l = logits[size_t(t)];
-      l = l < 0 ? l * kRepetitionPenalty : l / kRepetitionPenalty;
+    const float* allLogits = o.dataOf<float>(step[0]);
+
+    // One new token a row: the logits of the row's last real position.
+    std::vector<int64_t> nextIds(rows, kStartSpeech), nextPos(rows, int64_t(i) + 1);
+    std::vector<int64_t> newMask(size_t(batch) * size_t(maskLen + 1), 0);
+    for (size_t b = 0; b < rows; b++) {
+      // The row's mask so far, then 1 for a row still going (its new token).
+      std::copy(mask.begin() + long(b * size_t(maskLen)), mask.begin() + long((b + 1) * size_t(maskLen)),
+                newMask.begin() + long(b * size_t(maskLen + 1)));
+      if (done[b]) continue;
+      auto& gen = generated[b];
+      const int64_t at = i == 0 ? rowLen[b] - 1 : 0;
+      std::vector<float> logits(allLogits + (int64_t(b) * shape[1] + at) * vocab,
+                                allLogits + (int64_t(b) * shape[1] + at + 1) * vocab);
+      std::vector<int64_t> seen(gen);
+      std::sort(seen.begin(), seen.end());
+      seen.erase(std::unique(seen.begin(), seen.end()), seen.end());
+      for (int64_t t : seen) {
+        float& l = logits[size_t(t)];
+        l = l < 0 ? l * kRepetitionPenalty : l / kRepetitionPenalty;
+      }
+      const int64_t next = int64_t(std::max_element(logits.begin(), logits.end()) - logits.begin());
+      gen.push_back(next);
+      if (next == kStopSpeech) {
+        stopped[b] = true;
+        done[b] = true;
+      } else {
+        // Stuck on one token (silence, as a rule) for two seconds: the
+        // sentence is over or lost; drop the run and end here.
+        constexpr size_t kMaxRun = 50;
+        if (gen.size() > kMaxRun &&
+            std::all_of(gen.end() - kMaxRun, gen.end(), [&](int64_t t) { return t == next; })) {
+          gen.erase(gen.end() - kMaxRun, gen.end());
+          done[b] = true;
+        } else if (int(gen.size()) - 1 >= maxTokens[b]) {
+          done[b] = true;
+        }
+      }
+      if (done[b]) {
+        remaining--;
+        continue;
+      }
+      nextIds[b] = next;
+      newMask[b * size_t(maskLen + 1) + size_t(maskLen)] = 1;
     }
-    const int64_t next = int64_t(std::max_element(logits.begin(), logits.end()) - logits.begin());
-    generated.push_back(next);
-    if (next == kStopSpeech) {
-      stopped = true;
-      break;
-    }
-    // Stuck on one token (silence, as a rule) for two seconds: the sentence
-    // is over or lost; drop the run and end here.
-    constexpr size_t kMaxRun = 50;
-    if (generated.size() > kMaxRun &&
-        std::all_of(generated.end() - kMaxRun, generated.end(), [&](int64_t t) { return t == next; })) {
-      generated.erase(generated.end() - kMaxRun, generated.end());
-      break;
-    }
-    std::vector<int64_t> nextIds{next}, nextPos{int64_t(i) + 1};
-    const float* e = embedTokens(nextIds, nextPos);
-    inputs.assign(e, e + kHidden);
-    mask.push_back(1);
+    if (onProgress) onProgress(std::min(1.0, double(i + 1) / expectedSteps));
+    if (remaining == 0) break;
+    // A finished row keeps getting a token so the batch stays rectangular;
+    // its mask stops growing and its result is already taken.
+    const float* e = embedTokens(nextIds, nextPos, batch);
+    inputs.assign(e, e + size_t(batch) * kHidden);
+    inLen = 1;
+    mask.swap(newMask);
+    maskLen++;
   }
 
   // The new speech tokens, without start and stop.
-  return std::vector<int64_t>(generated.begin() + 1, generated.end() - (stopped ? 1 : 0));
+  std::vector<std::vector<int64_t>> out(rows);
+  for (size_t b = 0; b < rows; b++)
+    out[b].assign(generated[b].begin() + 1, generated[b].end() - (stopped[b] ? 1 : 0));
+  return out;
 }
 
 std::vector<float> Narrator::decode(const std::vector<int64_t>& tokens, const Voice& voice) {
@@ -721,6 +940,68 @@ std::vector<float> Narrator::decode(const std::vector<int64_t>& tokens, const Vo
   const auto shape = o.shapeOf(wav[0]);
   const float* w = o.dataOf<float>(wav[0]);
   std::vector<float> out(w, w + shape.back());
+  o.release(wav);
+  return out;
+}
+
+std::vector<std::vector<float>> Narrator::decodeBatch(const std::vector<std::vector<int64_t>>& pieces,
+                                                      const Voice& voice) {
+  auto& o = *impl_;
+  const size_t rows = pieces.size();
+  if (rows == 0) return {};
+  if (rows == 1) return {decode(pieces[0], voice)};
+
+  // Every row: the recording's tokens, the piece, then the piece's last
+  // token again up to the longest row. The decoder is not causal, so what
+  // follows a token colours its audio a little; a repeat of the last token
+  // (silence, as a rule, at the end of a sentence) is the most natural
+  // continuation, and the rows' last tokens came out as quiet as when
+  // decoded alone.
+  size_t longest = 0;
+  for (const auto& p : pieces) longest = std::max(longest, p.size());
+  const size_t len = longest;
+  const size_t promptLen = voice.promptTokens.size();
+  const size_t width = promptLen + len;
+  std::vector<int64_t> speech(rows * width);
+  std::vector<float> xVector, feat;
+  xVector.reserve(rows * voice.xVector.size());
+  feat.reserve(rows * voice.promptFeat.size());
+  for (size_t b = 0; b < rows; b++) {
+    int64_t* row = speech.data() + b * width;
+    std::copy(voice.promptTokens.begin(), voice.promptTokens.end(), row);
+    std::copy(pieces[b].begin(), pieces[b].end(), row + promptLen);
+    const int64_t pad = pieces[b].empty() ? voice.promptTokens.back() : pieces[b].back();
+    std::fill(row + promptLen + pieces[b].size(), row + width, pad);
+    xVector.insert(xVector.end(), voice.xVector.begin(), voice.xVector.end());
+    feat.insert(feat.end(), voice.promptFeat.begin(), voice.promptFeat.end());
+  }
+  const int64_t batch = int64_t(rows);
+  std::vector<OrtValue*> in{
+      o.tensor(speech.data(), speech.size(), {batch, int64_t(width)}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+      o.tensor(xVector.data(), xVector.size(), {batch, 192}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT),
+      o.tensor(feat.data(), feat.size(), {batch, voice.promptFrames, 80}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
+  std::vector<OrtValue*> wav;
+  try {
+    wav = o.run(o.decoder, {"speech_tokens", "speaker_embeddings", "speaker_features"}, in, {"waveform"});
+  } catch (...) {
+    o.release(in);
+    throw;
+  }
+  o.release(in);
+  const auto shape = o.shapeOf(wav[0]);
+  const size_t samples = size_t(shape.back());
+  const float* w = o.dataOf<float>(wav[0]);
+  // Each row's audio is its own tokens' share of the row (960 samples a
+  // token: 24 kHz at 25 tokens a second).
+  const size_t perToken = len ? samples / len : 0;
+  if (perToken * len != samples)
+    platform::log("decode: " + std::to_string(samples) + " samples for " + std::to_string(len) +
+                  " tokens a row is not a whole number a token");
+  std::vector<std::vector<float>> out(rows);
+  for (size_t b = 0; b < rows; b++) {
+    const float* row = w + b * samples;
+    out[b].assign(row, row + std::min(samples, perToken * pieces[b].size()));
+  }
   o.release(wav);
   return out;
 }

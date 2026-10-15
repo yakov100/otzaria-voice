@@ -14,6 +14,9 @@ This pack contains:
   voices/chaim.otzvoice
          The voice "חיים" (Chaim): speaker conditioning derived by the
          Otzaria project from a recording of its contributor.
+  nikud_lexicon.bin (a separate small download, placed in the pack)
+         How words of Talmudic Hebrew and Aramaic are vocalized, counted
+         from vocalized texts (section 5).
 
 
 1. Chatterbox Multilingual and Chatterbox Turbo (Resemble AI)
@@ -88,3 +91,25 @@ Derived by the Otzaria project, with the speech encoder of Chatterbox
 Multilingual, from a recording of the project's contributor, who agreed to
 its use for reading text aloud with this service. It holds no audio, only
 the speaker conditioning the models need.
+
+
+5. The nikud lexicon (nikud_lexicon.bin)
+----------------------------------------
+
+Built by the Otzaria project (tools/tts/build_nikud_lexicon.py) by counting
+how each word is vocalized in:
+
+  * The vocalized Babylonian Talmud of Dicta: The Israel Center for Text
+    Analysis — https://github.com/Dicta-Israel-Center-for-Text-Analysis/Talmud-Bavli-with-Nikud
+    License: Creative Commons Attribution-ShareAlike (CC BY-SA).
+    Credit, as the project asks: "Vocalized Talmud text by Dicta, The Israel
+    Center for Text Analysis" / "ניקוד התלמוד: דיקטה - המרכז הישראלי לניתוח
+    טקסטים".
+  * Vocalized books of the Otzaria library whose text is in the public
+    domain or under CC BY / CC BY-SA (the Mishnah after the Kaufmann
+    manuscript, the Zohar, prayer books, midrashim and others; the library
+    lists each book's source and license).
+
+The lexicon holds no text, only words and their marks. As a derivative of
+CC BY-SA material it is offered under CC BY-SA 4.0:
+https://creativecommons.org/licenses/by-sa/4.0/

@@ -47,6 +47,15 @@ int run(const std::vector<std::string>& args) {
       return 3;
     }
   }
+  if (arg == "--vocalize" && args.size() > 4) {
+    try {
+      return service::vocalizeTest(platform::fromUtf8(args[2]), platform::fromUtf8(args[3]),
+                                   platform::fromUtf8(args[4]));
+    } catch (const std::exception& ex) {
+      platform::log(std::string("vocalize: ") + ex.what());
+      return 3;
+    }
+  }
   if (arg == "--version") {
     std::printf("otzaria-voice %s\n", service::kVersion);
     return 0;

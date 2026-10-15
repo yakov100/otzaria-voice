@@ -32,6 +32,7 @@ set(COMMON_SOURCES
   ${SRC_COMMON}/audio.cpp
   ${SRC_DICTATION}/engine.cpp
   ${SRC_TTS}/narrator.cpp
+  ${SRC_TTS}/nikud_lexicon.cpp
   ${SRC_TTS}/voicemodel.cpp
   ${SRC_COMMON}/pack.cpp
   ${SRC_COMMON}/platform.cpp

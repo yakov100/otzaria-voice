@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "org.otzaria.read-aloud",
   "name": "הקראה קולית",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "מקריא בקול את הספר הפתוח ומדגיש את המילה הנקראת, ושומר פרק או קטע מסומן כקובץ MP3, בקול של Windows או בקול מוקלט. עובד בלי אינטרנט.",
   "author": "yakov100",
   "homepage": "https://github.com/yakov100/otzaria-voice",

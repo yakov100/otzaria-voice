@@ -40,7 +40,11 @@ using winrt::Windows::Storage::Streams::DataReader;
 constexpr size_t kPieceChars = 1200;     // one synthesis call; progress and cancel between
 constexpr UINT32 kBitrate = 64000;       // mono speech: small files, clear enough
 constexpr size_t kMaxResult = 95u << 20; // the plugin's upload limit is 100MB
-constexpr double kExampleSeconds = 5;    // of the voice's recording, for the decoder (see Voice::shortened)
+// Seconds of the voice's recording the decoder gets as its example (see
+// Voice::shortened). It decodes the example again with every sentence, so
+// this is much of its cost: 5 s took 88 s for a minute of speech, 3 s 76 s,
+// 2 s 55 s (10 cores). OTZARIA_NARRATOR_PROMPT_SECONDS overrides it.
+constexpr double kExampleSeconds = 2.5;
 
 std::mutex mu;      // current and result
 std::mutex jobMu;   // starting and cancelling (the worker thread itself)
@@ -281,7 +285,24 @@ Pcm speakSystem(const std::wstring& text, double rate) {
   return pcm;
 }
 
-/** A neural voice (narrator.h): slower, about twice the length of the audio. */
+/** Physical cores (hyper-threads add nothing to matrix work); 0 if unknown. */
+int physicalCores() {
+  DWORD size = 0;
+  GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &size);
+  if (size == 0) return 0;
+  std::vector<char> buf(size);
+  auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf.data());
+  if (!GetLogicalProcessorInformationEx(RelationProcessorCore, info, &size)) return 0;
+  int cores = 0;
+  for (DWORD at = 0; at < size;) {
+    auto* p = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf.data() + at);
+    if (p->Relationship == RelationProcessorCore) cores++;
+    at += p->Size;
+  }
+  return cores;
+}
+
+/** A neural voice (narrator.h): slower than real time (see speakAll). */
 Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
   if (!narrator::modelReady()) throw std::runtime_error("voice_model_missing");
   const auto voicePath = narrator::voicePath(voiceId);
@@ -292,24 +313,43 @@ Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
     std::lock_guard<std::mutex> lock(mu);
     current.voice = voiceId;
   }
-  // The language model and the decoder run at the same time (speakAll), so
-  // each gets part of the processor.
-  const int cores = int(std::max(4u, std::thread::hardware_concurrency()));
-  const int lmThreads = std::max(2, std::min(6, cores * 3 / 8));
-  const int decoderThreads = std::max(2, std::min(6, cores * 3 / 8));
+  // The language model and the decoder run at the same time (speakAll).
+  // Measured on 10 cores (i7-13620H), a minute of speech: the model takes
+  // about 20 ms a token with six pieces in a batch, the decoder about 30 ms
+  // a token, so the decoder needs at least as many cores as the model;
+  // giving the model most of them (10/3) was the slowest split, 6/6 and
+  // 5/8 the fastest. More threads than cores just contend.
+  int cores = physicalCores();
+  if (cores <= 0) cores = int(std::max(2u, std::thread::hardware_concurrency() / 2));
+  const int lmThreads = std::clamp(cores / 2, 3, 8);
+  const int decoderThreads = std::clamp(cores * 2 / 3, 3, 10);
   narrator::Narrator model(ort, narrator::modelDir(), lmThreads, decoderThreads);
-  const narrator::Voice voice = narrator::Voice::load(voicePath).shortened(kExampleSeconds);
+  const auto promptEnv = platform::env("OTZARIA_NARRATOR_PROMPT_SECONDS");
+  const double exampleSeconds = promptEnv.empty() ? kExampleSeconds : std::max(0.5, atof(promptEnv.c_str()));
+  const narrator::Voice voice = narrator::Voice::load(voicePath).shortened(exampleSeconds);
   const auto pieces = narrator::pieces(narrow(text));
+  // Characters before each piece, so progress can be told in characters.
+  std::vector<uint64_t> before(pieces.size() + 1, 0);
+  for (size_t i = 0; i < pieces.size(); i++) before[i + 1] = before[i] + widen(pieces[i]).size();
   std::vector<float> audioAll;
-  uint64_t done = 0;
+  uint64_t decoded = 0, generating = 0;
+  auto report = [&] {
+    // Generation runs ahead of decoding; the plugin's bar follows the
+    // further of the two (decoding is the shorter part).
+    current.doneChars = std::min<uint64_t>(std::max(decoded, generating), current.totalChars);
+  };
   const bool finished = model.speakAll(pieces, voice, [] { return bool(cancelFlag); },
                                        [&](size_t i, std::vector<float> audio) {
     audioAll.insert(audioAll.end(), audio.begin(), audio.end());
     audioAll.insert(audioAll.end(), narrator::kSampleRate / 6, 0.0f);  // a breath between sentences
-    done += widen(pieces[i]).size();
     std::lock_guard<std::mutex> lock(mu);
-    current.doneChars = std::min<uint64_t>(done, current.totalChars);
+    decoded = before[i + 1];
+    report();
     current.seconds = double(audioAll.size()) / narrator::kSampleRate;
+  }, [&](size_t first, size_t count, double fraction) {
+    std::lock_guard<std::mutex> lock(mu);
+    generating = before[first] + uint64_t(fraction * double(before[first + count] - before[first]));
+    report();
   });
   if (!finished || cancelFlag) throw std::runtime_error("cancelled");
   // The decoder's peaks pass 1.0 (1.2 in a test), which clipped and then
