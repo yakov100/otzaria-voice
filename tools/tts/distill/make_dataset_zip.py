@@ -37,8 +37,10 @@ def main():
             if seconds >= args.max_hours * 3600:
                 break
         synth = kept
-    rows = real + synth
-    tests = [r.split("|", 1)[1] for r in random.Random(args.seed + 1).sample(synth, min(10, len(synth)))]
+    # the listening sentences stay out of the training set, so they test generalisation
+    held = set(random.Random(args.seed + 1).sample(synth, min(10, len(synth))))
+    tests = [r.split("|", 1)[1] for r in held]
+    rows = real + [r for r in synth if r not in held]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
         z.writestr("metadata.csv", "\n".join(rows) + "\n")
         z.writestr("test_sentences.txt", "\n".join(tests) + "\n")
