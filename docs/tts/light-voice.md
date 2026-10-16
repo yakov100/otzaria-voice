@@ -87,6 +87,10 @@ akdan-tiny`, כ-6 דקות ל-shard, ניתנת להמשך).
   ייצוא ONNX עם אותם שמות קלט/פלט, int8 דינמי (~6MB), בדיקה ב-onnxruntime. השירות טוען אותו כמו שהוא
   (`tts/nakdan/nakdan.onnx`, או OTZARIA_NAKDAN_DIR לבדיקה עם `eval_nikud.py`).
 
+- ריצת המורה הסתיימה (16.10, 10:00–16:58, 60 shards): 51,011 דוגמאות, 6.79M אותיות מתויגות (132 מחוץ
+  למחלקות), 7 חלקי npz (52MB) + `meta.json` הועלו ל-Drive `otzaria-light/nakdan-tiny/dataset/`.
+  המחברת של המנקד הזעיר ב-`otzaria-light/nakdan-tiny/train_colab.ipynb`.
+
 ## מה נשאר
 C1 (אימון הניסוי ב-Colab, כשייפתח) → האזנה והחלטה; B מלא (`generate_colab.ipynb`), C2; פרסום
 `light-voice-v1` (zip של הקול + zip של המנקד, למלא גודל ו-SHA ב-`kLight`/`kNakdanPack`); העתקת התוסף לאוצריא;
