@@ -35,3 +35,11 @@ VITS קטן (Piper, ~63MB, פי 30 מזמן אמת) שמדבר באותו קול
 Chatterbox (MIT) הוא מקור האודיו הסינתטי; Piper (GPL-3) משמש לאימון בלבד, הרשת בשירות
 רצה על ONNX Runtime בלי קוד Piper; הטקסטים: ש"ס דיקטה (CC BY-SA) וספרים חופשיים
 מהספרייה; הקול: חיים, בהסכמתו.
+
+## Uploading to Drive by browser, and the light-voice test mode (16.10)
+- `split_for_drive.py` re-packs `dataset.zip` as FLAC and splits it into 9MB parts
+  (`dataset-flac.zip.NNN` + `.sha256`); `train_colab.ipynb` cell 3 joins and checks them.
+  Needed when the upload goes through a browser automation that takes 10MB a call.
+- `otzaria-voice --light <model.onnx> <text.txt> <out dir> [--raw]` speaks each line with a
+  light voice (vocalized by the installed diacritizer first; `--raw` feeds the lines as symbols),
+  writing NN.wav and report.jsonl with the symbols, id counts and seconds.

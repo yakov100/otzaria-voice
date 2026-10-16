@@ -23,10 +23,13 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
+#include "light.h"
+#include "nakdan.h"
 #include "narrator.h"
 #include "platform.h"
 
@@ -365,6 +368,66 @@ Pcm speakNeural(const std::wstring& text, const std::string& voiceId) {
   return pcm;
 }
 
+/**
+ * The light voice (light.h): vocalized by the diacritizer in chunks of pieces
+ * (for context), then spoken piece by piece, 20-50 times faster than real time.
+ */
+Pcm speakLight(const std::wstring& text, const std::string& voiceId) {
+  const auto model = light::modelPath(voiceId);
+  if (model.empty()) throw std::runtime_error("light_model_missing");
+  if (!nakdan::ready()) throw std::runtime_error("nakdan_missing");
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    current.voice = voiceId;
+  }
+  int cores = physicalCores();
+  if (cores <= 0) cores = int(std::max(2u, std::thread::hardware_concurrency() / 2));
+  const int threads = std::clamp(cores / 2, 2, 4);
+  nakdan::Nakdan nk(ort, nakdan::dir(), threads);
+  light::LightVoice voice(ort, model, threads);
+  const int rate = voice.sampleRate();
+  const auto pieces = narrator::pieces(narrow(text));
+  std::vector<uint64_t> before(pieces.size() + 1, 0);
+  for (size_t i = 0; i < pieces.size(); i++) before[i + 1] = before[i] + widen(pieces[i]).size();
+  std::vector<float> audioAll;
+  constexpr size_t kChunk = 40;  // pieces vocalized together
+  for (size_t start = 0; start < pieces.size(); start += kChunk) {
+    const size_t end = std::min(pieces.size(), start + kChunk);
+    if (cancelFlag) throw std::runtime_error("cancelled");
+    std::string joined;
+    for (size_t i = start; i < end; i++) joined += pieces[i] + "\n";
+    std::vector<std::string> vocalized;
+    {
+      std::stringstream ss(nk.vocalize(joined, true));
+      std::string line;
+      while (std::getline(ss, line)) vocalized.push_back(line);
+    }
+    if (vocalized.size() != end - start) {
+      vocalized.clear();
+      for (size_t i = start; i < end; i++) vocalized.push_back(nk.vocalize(pieces[i], true));
+    }
+    for (size_t k = 0; k < vocalized.size(); k++) {
+      if (cancelFlag) throw std::runtime_error("cancelled");
+      const auto audio = voice.speak(vocalized[k]);
+      audioAll.insert(audioAll.end(), audio.begin(), audio.end());
+      audioAll.insert(audioAll.end(), size_t(rate / 6), 0.0f);  // a breath between sentences
+      std::lock_guard<std::mutex> lock(mu);
+      current.doneChars = std::min<uint64_t>(before[start + k + 1], current.totalChars);
+      current.seconds = double(audioAll.size()) / rate;
+    }
+  }
+  float peak = 0;
+  for (float x : audioAll) peak = std::max(peak, std::fabs(x));
+  const float gain = peak > 0.89f ? 0.89f / peak : 1.0f;
+  Pcm pcm;
+  pcm.rate = UINT32(rate);
+  pcm.samples.reserve(audioAll.size());
+  for (float x : audioAll) pcm.samples.push_back(int16_t(std::lround(std::clamp(x * gain, -1.0f, 1.0f) * 32767)));
+  return pcm;
+}
+
 /** Writes [mp3] into [dir] as [name].mp3, or "name (2).mp3" etc. if taken. */
 std::wstring saveInto(const std::wstring& dir, std::wstring name, const std::string& mp3) {
   std::wstring clean;
@@ -398,7 +461,9 @@ void run(std::wstring text, double rate, std::string voiceId, std::wstring saveD
   bool cancelled = false;
   try {
     const bool system = voiceId.empty() || voiceId == "system";
-    Pcm pcm = system ? speakSystem(text, rate) : speakNeural(text, voiceId);
+    Pcm pcm = system                      ? speakSystem(text, rate)
+              : light::isLightId(voiceId) ? speakLight(text, voiceId)
+                                          : speakNeural(text, voiceId);
     if (pcm.samples.empty()) throw std::runtime_error("nothing to read");
     mp3 = encodeMp3(resampleForMp3(pcm));
     if (!saveDir.empty()) {

@@ -42,6 +42,12 @@ int vocalizeTest(const platform::Path& models, const platform::Path& text, const
 int narrateTest(const platform::Path& models, const platform::Path& voice, const platform::Path& text,
                 const platform::Path& outDir);
 
+// --light <model.onnx> <text.txt> <out dir> [--raw]: reads each line with the
+// light voice (light.h), vocalized by the installed diacritizer first unless
+// --raw (then the lines are the voice's symbols as they are); writes NN.wav
+// and report.jsonl.
+int lightTest(const platform::Path& model, const platform::Path& text, const platform::Path& outDir, bool raw);
+
 // One dictation at a time: plugin (POST /dictate). The service never types into other programs.
 extern std::mutex sessionMu;
 extern std::atomic<bool> active;

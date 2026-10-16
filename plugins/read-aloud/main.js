@@ -30,7 +30,17 @@ const SYSTEM_VOICE_ITEM = 'voice-system';
 const VOICE_ITEM_PREFIX = 'voice-';
 const PACK_VOICES = ['chaim'];                      // always offered: choosing one fetches the pack
 const RECORDED_NAMES = { chaim: 'חיים' };           // display names; other ids are shown as they are
+// The light voice (ids end in '-light'): a small, fast model trained on the
+// recorded voice; its own download (GET /status: lightVoices, lightModel,
+// lightModelSize). Always offered too, so that choosing it starts the download.
+const LIGHT_SUFFIX = '-light';
+const LIGHT_VOICES = ['chaim-light'];
+const LIGHT_NAMES = { 'chaim-light': 'חיים קל' };
 const MAX_MENU_CHILDREN = 20;                       // Otzaria's limit per menu
+
+function isLightVoice(voice) {
+  return typeof voice === 'string' && voice.endsWith(LIGHT_SUFFIX) && voice.length > LIGHT_SUFFIX.length;
+}
 
 /** The menu item id of a voice ('' = the system voice). */
 function voiceItemId(voice) {
@@ -46,15 +56,17 @@ function voiceOfItem(itemId) {
   return null;
 }
 
-/** 'אסף (הקול של Windows)', 'חיים (קול מוקלט)', 'moshe (קול מוקלט)'. */
+/** 'אסף (הקול של Windows)', 'חיים (קול מוקלט)', 'חיים קל (מהיר)', 'moshe (קול מוקלט)'. */
 function voiceLabel(voice) {
   if (!voice) return 'אסף (הקול של Windows)';
+  if (isLightVoice(voice)) return (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
   return (RECORDED_NAMES[voice] || voice) + ' (קול מוקלט)';
 }
 
-/** The menu title of a voice: 'קול לשמירה: חיים (מוקלט)'. */
+/** The menu title of a voice: 'קול לשמירה: חיים (מוקלט)', 'קול לשמירה: חיים קל (מהיר)'. */
 function voiceMenuTitle(voice) {
   if (!voice) return 'קול לשמירה: אסף (של Windows)';
+  if (isLightVoice(voice)) return 'קול לשמירה: ' + (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
   return 'קול לשמירה: ' + (RECORDED_NAMES[voice] || voice) + ' (מוקלט)';
 }
 
@@ -64,14 +76,17 @@ function isUsableVoiceId(voice) {
 }
 
 /**
- * The voices to offer: the pack's voices first (always, so that choosing one
- * can start the pack download), then every other installed voice.
+ * The voices to offer: the light voice first, then the pack's voices (both
+ * always, so that choosing one can start its download), then every other
+ * installed voice, light ones included.
  */
-function menuVoices(installed) {
-  const out = PACK_VOICES.slice();
-  (Array.isArray(installed) ? installed : []).forEach(v => {
+function menuVoices(installed, installedLight) {
+  const out = LIGHT_VOICES.concat(PACK_VOICES);
+  const add = list => (Array.isArray(list) ? list : []).forEach(v => {
     if (isUsableVoiceId(v) && !out.includes(v)) out.push(v);
   });
+  add(installedLight);
+  add(installed);
   return out;
 }
 
@@ -90,7 +105,8 @@ function menuChildren(voices) {
     { id: SYSTEM_VOICE_ITEM, title: voiceMenuTitle('') }
   ];
   const after = [
-    { id: 'remove-voice-model', title: 'הסר את הקול המוקלט מהמחשב', icon: 'fluent:delete_24_regular' }
+    { id: 'remove-voice-model', title: 'הסר את הקול המוקלט מהמחשב', icon: 'fluent:delete_24_regular' },
+    { id: 'remove-light-model', title: 'הסר את הקול הקל מהמחשב', icon: 'fluent:delete_24_regular' }
   ];
   const room = MAX_MENU_CHILDREN - before.length - after.length;
   const items = voices.slice(0, room).map(v => ({ id: voiceItemId(v), title: voiceMenuTitle(v) }));
@@ -697,7 +713,7 @@ async function refreshVoiceMenu(status) {
       return false;
     }
   }
-  const voices = menuVoices(st && st.voices);
+  const voices = menuVoices(st && st.voices, st && st.lightVoices);
   const key = voices.join('\n');
   if (key === shownVoices) return true;
   const res = await call('reader.updateToolbarItem', { id: TOOLBAR_ID, patch: { children: menuChildren(voices) } });
@@ -719,9 +735,114 @@ async function setVoice(voice) {
   }
   refreshVoiceMenu(st);
   if (!voice) return;
-  // A recorded voice needs the model pack; fetch it now rather than at the
-  // first save, so that the save itself is not held up by a long download.
-  if (st && st.voiceModel === false) await offerVoiceModel(st);
+  // A voice needs its model; fetch it now rather than at the first save, so
+  // that the save itself is not held up by a long download.
+  if (isLightVoice(voice)) {
+    if (st && !(st.lightVoices || []).includes(voice)) await offerLightModel(st);
+  } else if (st && st.voiceModel === false) {
+    await offerVoiceModel(st);
+  }
+}
+
+/** Deletes the light voice (and its diacritizer, when nothing else uses it). */
+async function removeLightModel() {
+  let st = null;
+  try {
+    st = await serviceStatus();
+  } catch (_) {
+    message('שירות הדיבור אינו פועל.');
+    return;
+  }
+  if (!st || !st.lightModel) {
+    message('הקול הקל אינו מותקן במחשב הזה.');
+    return;
+  }
+  const ok = await call('ui.showConfirm', {
+    title: 'הסרת הקול הקל',
+    content: 'הקול הקל יימחק מהמחשב. אפשר להוריד אותו שוב בכל עת.\n\nלהסיר את הקול?'
+  });
+  if (!ok.success || !ok.data || !ok.data.confirmed) return;
+  try {
+    const lines = await serviceRequest('/remove-light-model', 'POST');
+    const r = lines[lines.length - 1];
+    const mb = r && r.freedBytes ? Math.round(r.freedBytes / 1048576) : 0;
+    if (isLightVoice(state.mp3Voice)) {
+      state.mp3Voice = '';
+      await call('storage.set', { key: 'mp3Voice', value: '' });
+    }
+    message('הקול הקל הוסר' + (mb ? ' (פונו ' + mb + ' מגה-בייט)' : '') + '.' +
+      (isLightVoice(state.mp3Voice) ? '' : ' הקול לשמירה כ-MP3 הוא עכשיו ' + voiceLabel(state.mp3Voice) + '.'));
+    refreshVoiceMenu();
+  } catch (e) {
+    message(e && e.code === 'busy' ? 'יש להמתין לסיום ההורדה או השמירה, ואז לנסות שוב.' : 'ההסרה נכשלה: ' + String((e && e.message) || e));
+  }
+}
+
+let downloadingLight = false;
+
+/** Asks, then has the service download the light voice, showing progress. */
+async function offerLightModel(status) {
+  if (downloadingLight) {
+    message('הורדת הקול הקל כבר מתבצעת.');
+    return;
+  }
+  let st = status;
+  if (!st) {
+    try {
+      st = await serviceStatus();
+    } catch (_) {
+      await offerServiceInstall();
+      return;
+    }
+  }
+  if (st && st.lightPublished === false) {
+    message('הקול הקל עדיין לא פורסם. בינתיים אפשר להשתמש בקול המוקלט.');
+    return;
+  }
+  if (st && st.lightModelSize === undefined) {
+    message('שירות הדיבור המותקן ישן מדי לקול הקל. יש לעדכן את התוסף "חיפוש בדיבור" ואת השירות שלו.');
+    return;
+  }
+  const mb = st && st.lightModelSize ? Math.round(st.lightModelSize / 1048576) : 0;
+  const ok = await call('ui.showConfirm', {
+    title: 'הורדת הקול הקל',
+    content: 'הקול הקל דורש הורדה חד-פעמית של כ-' + mb + ' מגה-בייט' +
+      (st && st.nakdan === false ? ' (רובה המנקד, שמשותף לקול המוקלט)' : '') +
+      '. אחרי ההורדה הוא פועל במחשב עצמו, בלי אינטרנט, והכנת MP3 אורכת כדקה לשעת הקראה.\n\nלהוריד עכשיו?'
+  });
+  if (!ok.success || !ok.data || !ok.data.confirmed) return;
+  downloadingLight = true;
+  try {
+    await serviceRequest('/install-light-model', 'POST');
+    let job = null;
+    let lastShown = -1;
+    showExportProgress(0);
+    while (true) {
+      await serviceRequest('/light-model-wait', 'POST', null, obj => {
+        job = obj;
+        if (obj.state !== 'downloading') return;
+        const pct = obj.total ? Math.floor(100 * obj.received / obj.total) : 0;
+        showExportProgress(pct);
+        if (pct - lastShown >= 10) {
+          lastShown = pct;
+          message('מוריד את הקול הקל… ' + pct + '%');
+        }
+      });
+      if (!job || job.state === 'done' || job.state === 'error' || job.state === 'idle') break;
+    }
+    showExportProgress(null);
+    if (job && job.state === 'done') {
+      message('הקול הקל הותקן. אפשר לשמור כ-MP3.');
+      refreshVoiceMenu();
+    } else {
+      message('הורדת הקול הקל נכשלה: ' + ((job && job.error) || 'שגיאה לא ידועה'));
+    }
+  } catch (e) {
+    showExportProgress(null);
+    message(e && e.code === 'not_published' ? 'הקול הקל עדיין לא פורסם.' : 'הורדת הקול הקל נכשלה: ' + String((e && e.message) || e));
+  } finally {
+    downloadingLight = false;
+  }
 }
 
 /** Deletes the recorded voice's model pack (about 900MB) from the computer. */
@@ -981,6 +1102,7 @@ function serviceProblem(e) {
   if (code === 'unsupported') return 'שמירה כ-MP3 זמינה כרגע רק ב-Windows.';
   const msg = e && e.message;
   if (msg === 'unknown_voice') return 'הקול שנבחר אינו מותקן. אפשר לבחור קול אחר בתפריט ההקראה.';
+  if (msg === 'nakdan_missing') return 'הקול הקל צריך את המנקד, שאינו מותקן. יש להסיר את הקול הקל ולהוריד אותו שוב.';
   if (code === 'no_hebrew_voice' || (e && e.message === 'no_hebrew_voice')) {
     return 'לא נמצא קול עברי במחשב. יש להתקין אותו: הגדרות Windows ← זמן ושפה ← דיבור ← הוספת קולות ← עברית.';
   }
@@ -1042,15 +1164,18 @@ async function exportMp3(text, name) {
         return;
       }
       if (e && e.message === 'voice_model_missing') { offerVoiceModel(); return; }
+      if (e && e.message === 'light_model_missing') { offerLightModel(); return; }
       const known = serviceProblem(e);
       if (known) { message(known); return; }
       await offerServiceInstall();
       return;
     }
     await call('storage.set', { key: 'pendingExport', value: { name } });
-    message(state.mp3Voice
-      ? 'מכין קובץ MP3 בקול המוקלט. זה לוקח בערך כאורך ההקראה. הקובץ יישמר בתיקייה: ' + folder
-      : 'מכין קובץ MP3. הוא יישמר בתיקייה: ' + folder);
+    message(isLightVoice(state.mp3Voice)
+      ? 'מכין קובץ MP3 בקול ' + voiceLabel(state.mp3Voice) + '. זה מהיר: כדקה לשעת הקראה. הקובץ יישמר בתיקייה: ' + folder
+      : state.mp3Voice
+        ? 'מכין קובץ MP3 בקול המוקלט. זה לוקח בערך כאורך ההקראה. הקובץ יישמר בתיקייה: ' + folder
+        : 'מכין קובץ MP3. הוא יישמר בתיקייה: ' + folder);
     await finishExport();
   } catch (e) {
     message('שמירה כ-MP3 נכשלה: ' + String((e && e.message) || e));
@@ -1225,6 +1350,7 @@ Otzaria.on('reader.toolbar_item_clicked', async data => {
   if (id === 'choose-folder') return chooseFolder();
   if (id === 'cancel-export') return cancelExport();
   if (id === 'remove-voice-model') return removeVoiceModel();
+  if (id === 'remove-light-model') return removeLightModel();
 });
 
 Otzaria.on('reader.context_menu_item_clicked', data => {

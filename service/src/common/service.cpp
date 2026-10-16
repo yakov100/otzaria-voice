@@ -39,6 +39,8 @@
 #include <thread>
 
 #include "json.h"
+#include "light.h"
+#include "nakdan.h"
 #include "narrator.h"
 #include "pack.h"
 #include "speech.h"
@@ -48,7 +50,7 @@
 
 namespace service {
 
-const char* kVersion = "2.3.0";
+const char* kVersion = "2.4.0";
 
 namespace {
 
@@ -393,6 +395,23 @@ std::string voicesJson() {
   return out + "]";
 }
 
+std::string lightVoicesJson() {
+  std::string out = "[";
+  for (const auto& v : light::installedVoices()) out += (out.size() > 1 ? "," : "") + json::quote(v);
+  return out + "]";
+}
+
+std::string lightModelJob() {
+  const auto p = voicemodel::lightProgress();
+  return "{\"state\":" + json::quote(p.state) + ",\"received\":" + std::to_string(p.received) +
+         ",\"total\":" + std::to_string(p.total) + ",\"error\":" + json::quote(p.error) + "}";
+}
+
+bool lightModelBusy() {
+  const auto st = voicemodel::lightProgress().state;
+  return st == "downloading" || st == "verifying" || st == "extracting";
+}
+
 std::string speakStatus() {
   const auto st = speech::status();
   char seconds[32];
@@ -546,7 +565,12 @@ void handle(Socket s) {
                   (narrator::modelReady() ? "true" : "false") + ",\"voiceModelSize\":" +
                   std::to_string(voicemodel::kRelease.size) + ",\"voiceModelJob\":" + voiceModelJob() +
                   ",\"lexicon\":" + (narrator::lexiconReady() ? "true" : "false") +
-                  ",\"voices\":" + voicesJson() + "}");
+                  ",\"voices\":" + voicesJson() + ",\"lightVoices\":" + lightVoicesJson() +
+                  ",\"lightModel\":" + (voicemodel::lightReady() ? "true" : "false") +
+                  ",\"lightModelSize\":" + std::to_string(voicemodel::lightDownloadSize()) +
+                  ",\"lightModelJob\":" + lightModelJob() +
+                  ",\"lightPublished\":" + (voicemodel::lightPublished() ? "true" : "false") +
+                  ",\"nakdan\":" + (voicemodel::nakdanReady() ? "true" : "false") + "}");
     } else if (req.method == "POST" && req.path == "/warm") {
       // The plugin asks as soon as it wakes, so that the model loads while the
       // user is still reaching for the microphone. Answers at once.
@@ -606,6 +630,23 @@ void handle(Socket s) {
       // The download takes minutes; the plugin holds this open in 100-second
       // stretches (see speakWait) so that Otzaria keeps it alive meanwhile.
       streamWhile(s, voiceModelJob, voiceModelBusy);
+    } else if (req.method == "POST" && req.path == "/install-light-model") {
+      if (!voicemodel::lightPublished()) {
+        respond(s, 409, errorBody("not_published", "the light voice is not published yet"));
+      } else {
+        voicemodel::startInstallLight([] { speech::cancel(); });
+        respond(s, 200, "{\"started\":true,\"lightModelJob\":" + lightModelJob() + "}");
+      }
+    } else if (req.method == "POST" && req.path == "/light-model-wait") {
+      streamWhile(s, lightModelJob, lightModelBusy);
+    } else if (req.method == "POST" && req.path == "/remove-light-model") {
+      if (lightModelBusy() || speech::status().state == "working") {
+        respond(s, 409, errorBody("busy", "wait for the download or the reading to end"));
+      } else {
+        speech::cancel();
+        const uint64_t freed = voicemodel::removeLight();
+        respond(s, 200, "{\"removed\":true,\"freedBytes\":" + std::to_string(freed) + "}");
+      }
     } else if (req.method == "POST" && req.path == "/speak-result") {
       speakResult(s);
     } else if (req.method == "POST" && req.path == "/speak-cancel") {
@@ -1014,6 +1055,56 @@ int narrateTest(const platform::Path& models, const platform::Path& voicePath, c
     snprintf(name, sizeof name, "%02d.wav", lineNo);
     writeWav16(outDir / name, all, narrator::kSampleRate);
   }
+  fclose(report);
+  return 0;
+}
+
+int lightTest(const platform::Path& model, const platform::Path& text, const platform::Path& outDir, bool raw) {
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
+  auto ms = [](auto a, auto b) {
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+  };
+  const auto t0 = std::chrono::steady_clock::now();
+  std::unique_ptr<nakdan::Nakdan> nk;
+  if (!raw) nk = std::make_unique<nakdan::Nakdan>(ort, nakdan::dir(), 4);
+  light::LightVoice voice(ort, model, 4);
+  const auto t1 = std::chrono::steady_clock::now();
+  std::filesystem::create_directories(outDir);
+#ifdef _WIN32
+  FILE* report = _wfopen((outDir / "report.jsonl").c_str(), L"wb");
+#else
+  FILE* report = fopen((outDir / "report.jsonl").c_str(), "wb");
+#endif
+  if (!report) return 2;
+  fprintf(report, "{\"load_ms\":%lld,\"sample_rate\":%d}\n", ms(t0, t1), voice.sampleRate());
+  std::ifstream in(text, std::ios::binary);
+  std::string line;
+  int lineNo = 0;
+  double seconds = 0;
+  long long total = 0;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (util::trim(line).empty()) continue;
+    lineNo++;
+    std::vector<float> all;
+    const auto a = std::chrono::steady_clock::now();
+    for (const auto& piece : narrator::pieces(line)) {
+      const std::string symbols = raw ? piece : nk->vocalize(piece, true);
+      const auto pcm = voice.speak(symbols);
+      all.insert(all.end(), pcm.begin(), pcm.end());
+      all.insert(all.end(), size_t(voice.sampleRate() / 6), 0.0f);
+      fprintf(report, "{\"line\":%d,\"symbols\":%s,\"ids\":%zu,\"seconds\":%.2f}\n", lineNo,
+              json::quote(symbols).c_str(), voice.ids(symbols).size(), double(pcm.size()) / voice.sampleRate());
+    }
+    const auto b = std::chrono::steady_clock::now();
+    total += ms(a, b);
+    seconds += double(all.size()) / voice.sampleRate();
+    char name[32];
+    snprintf(name, sizeof name, "%02d.wav", lineNo);
+    writeWav16(outDir / name, all, voice.sampleRate());
+  }
+  fprintf(report, "{\"lines\":%d,\"audio_seconds\":%.1f,\"ms\":%lld}\n", lineNo, seconds, total);
   fclose(report);
   return 0;
 }

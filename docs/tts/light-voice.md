@@ -47,6 +47,35 @@
 דיבור. נוספו: שעון-עצר על ריצת המפענח (מועיל ללולאות בין kernels), קיצור רצפים של אותו טוקן ל-12, ופיסה
 ריקה כשקט. זה היה יכול לתקוע גם את השירות אצל משתמשים.
 
+## העלאה ל-Drive ואימון (16.10)
+- המחברות `train_colab.ipynb` ו-`generate_colab.ipynb` ב-Drive בתיקייה `otzaria-light/`; `gen-input/` עם
+  `sentences.tsv`, `sentences.vocalized.txt`, `ref.wav`.
+- הנתונים עלו כ-38 חלקים `dataset-flac.zip.NNN` (9MB כל אחד, `split_for_drive.py`) + `sha256`, כי
+  ההעלאה דרך הדפדפן מוגבלת ל-10MB לקריאה ולחיצה סינתטית לא פותחת את חלון הקבצים של Windows. תא 3
+  במחברת מאחד, בודק ומפענח FLAC→WAV.
+- המחברת תוקנה מול קוד piper1-gpl: טבלת סמלים משלנו (`--data.phonemes_path`, 256 מקומות כמו הבסיס,
+  נשמרת ב-`runs/<run>/phonemes.json`), `--data.espeak_voice` חובה גם במצב טקסט, אימון מהבסיס עם
+  `--model.warmstart_ckpt` (העתקה לא-קפדנית של כל משקל תואם) ו-`--ckpt_path` רק להמשך ריצה שלנו, 200 אפוקים
+  לניסוי, נקודת שמירה כל 500 צעדים ל-Drive. קלט המודל: `^ _ (סמל _)* $` על טקסט ב-NFD.
+- Colab עצמו חסום בסינון (אתרוג נפתח, נטפרי עדיין חוסם) ולכן האימון טרם רץ.
+
+## שלב D: השירות והתוסף (16.10, נבנה ונבדק, שירות 2.4.0, תוסף 1.2.0)
+- `nakdan.{h,cpp}`: המנקד והמילון הופרדו מ-`Narrator` (שמאציל אליהם). `nakdan::dir()` הוא `tts/nakdan` אם
+  יש שם `nakdan.onnx`, אחרת חבילת הקול הכבד. הפלט זהה בית-בבית לגרסה הקודמת (150 שורות holdout).
+- `light.{h,cpp}`: מנוע Piper/VITS על ONNX Runtime: `tts/light/<id>-light.onnx + .json`; קלט = טקסט מנוקד עם
+  סימני ההגייה, בסדר קנוני (`hebrew_text.h canonicalOrder`, זהה ל-NFD של פייתון), `^ _ (סמל _)* $`.
+  נבדק עם קול Piper ציבורי (en_US-lessac): 7.6 שניות אודיו ב-326 אלפיות (פי 23 מזמן אמת על 4 חוטים).
+- `speech_win.cpp`: מזהה קול שמסתיים ב-`-light` → `speakLight` (ניקוד בקבוצות של 40 פיסות, דיבור פיסה-פיסה,
+  22.05 kHz → MP3). שגיאות: `light_model_missing`, `nakdan_missing`.
+- `voicemodel.cpp`: `kLight` ו-`kNakdanPack` (גודל 0 עד הפרסום → `not_published`), `installZip` משותף,
+  `startInstallLight` מוריד גם את המנקד כשאין חבילה כבדה; `removeLight`. `/status`: `lightVoices`, `lightModel`,
+  `lightModelSize`, `lightModelJob`, `lightPublished`, `nakdan`; נקודות `/install-light-model`,
+  `/light-model-wait`, `/remove-light-model`. נבדק מקצה לקצה מול zip בשרת מקומי (OTZARIA_LIGHT_MODEL_URL/_SIZE/_SHA256).
+- מצב בדיקה: `otzaria-voice --light <model.onnx> <text.txt> <out dir> [--raw]`.
+- התוסף: "חיים קל (מהיר)" תמיד בתפריט, הצעת הורדה עם הגודל מהשירות, הסרה, הודעות; בדיקות ירוקות.
+  **לא הועתק לאוצריא** עד שהקול יפורסם (בינתיים הבחירה בו מסבירה שעדיין לא פורסם).
+
 ## מה נשאר
-שלב B מלא (לילות), C1/C2 (אימון), D (שילוב בשירות ובתוסף: `nakdan.cpp`, `light.cpp`, הורדה, תפריט),
-E (מנקד זעיר), F (תיעוד ושחרור). ראו `~/.claude/plans/valiant-hopping-kahn.md` לפירוט.
+C1 (אימון הניסוי ב-Colab, כשייפתח) → האזנה והחלטה; B מלא (`generate_colab.ipynb`), C2; פרסום
+`light-voice-v1` (zip של הקול + zip של המנקד, למלא גודל ו-SHA ב-`kLight`/`kNakdanPack`); העתקת התוסף לאוצריא;
+E (מנקד זעיר); F. ראו `~/.claude/plans/valiant-hopping-kahn.md` לפירוט.

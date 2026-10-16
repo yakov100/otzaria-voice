@@ -36,4 +36,24 @@ uint64_t removeInstalled();
 // is called before the new files replace old ones (open model sessions).
 void startInstall(std::function<void()> release);
 
+// ---- The light voice (light.h): a small zip with <id>-light.onnx and
+// <id>-light.json, and, for a computer without the recorded voice's pack, the
+// diacritizer's own zip (nakdan.onnx, nakdan_tokenizer.json) into tts/nakdan.
+// Until the voice is published kLight.size is 0 and the install reports
+// "not_published"; OTZARIA_LIGHT_MODEL_URL/_SIZE/_SHA256 (and the same with
+// OTZARIA_NAKDAN_PACK_) replace the releases for testing.
+extern const pack::Release kLight;
+extern const pack::Release kNakdanPack;
+
+bool lightReady();            // at least one light voice installed
+bool nakdanReady();           // a diacritizer is available (pack or own folder)
+bool lightPublished();        // kLight (or its override) can be downloaded
+// What a download would fetch now: the voice, plus the diacritizer if missing.
+uint64_t lightDownloadSize();
+pack::Progress lightProgress();
+void startInstallLight(std::function<void()> release);
+// Deletes the light voices, and the diacritizer's own folder when the
+// recorded voice's pack is not installed either (nothing else uses it).
+uint64_t removeLight();
+
 }  // namespace voicemodel

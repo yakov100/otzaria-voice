@@ -12,8 +12,8 @@ const dir = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
 
-/** Loads main.js with a fake host. [service] answers GET/POST by path, or throws when null. */
-function load(service) {
+/** Loads main.js with a fake host. [service] answers GET/POST by path, or throws when null; [confirm] answers ui.showConfirm. */
+function load(service, confirm) {
   const handlers = {};
   const calls = [];
   const storage = {};
@@ -34,6 +34,7 @@ function load(service) {
         const p = payload.url.replace(/^http:\/\/127\.0\.0\.1:47811/, '');
         return stream(service(p, payload.method, payload.body ? JSON.parse(payload.body) : null));
       }
+      if (method === 'ui.showConfirm') return Promise.resolve({ success: true, data: { confirmed: !!confirm } });
       if (method === 'storage.get') return Promise.resolve({ success: true, data: storage[payload.key] });
       if (method === 'storage.set') { storage[payload.key] = payload.value; return Promise.resolve({ success: true }); }
       if (method === 'storage.remove') { delete storage[payload.key]; return Promise.resolve({ success: true }); }
@@ -62,17 +63,26 @@ async function test(name, fn) {
 }
 
 (async () => {
-  await test('the manifest declares the menu as built for the pack voice alone', () => {
+  await test('the manifest declares the menu as built for the light and the pack voice alone', () => {
     const { ctx } = load(null);
     const declared = manifest.contributes.startup.toolbarItems[0].children;
-    same(ctx.menuChildren(['chaim']), declared);
+    same(ctx.menuChildren(ctx.menuVoices(undefined, undefined)), declared);
   });
 
-  await test('menuVoices: pack voice first, installed ids after, bad ids dropped', () => {
+  await test('light voices are labelled as fast and have their own remove item', () => {
     const { ctx } = load(null);
-    same(ctx.menuVoices(['test24', 'chaim', 'moshe']), ['chaim', 'test24', 'moshe']);
-    same(ctx.menuVoices(undefined), ['chaim']);
-    same(ctx.menuVoices(['', 'a\u0001b', 7, 'system', 'x'.repeat(61), 'ok']), ['chaim', 'ok']);
+    const children = ctx.menuChildren(['chaim-light', 'chaim']);
+    assert.strictEqual(children.find(c => c.id === 'voice-chaim-light').title, 'קול לשמירה: חיים קל (מהיר)');
+    assert.strictEqual(children[children.length - 1].id, 'remove-light-model');
+    assert.strictEqual(ctx.voiceOfItem('voice-chaim-light'), 'chaim-light');
+    same(ctx.menuVoices(['chaim'], ['chaim-light', 'moshe-light']), ['chaim-light', 'chaim', 'moshe-light']);
+  });
+
+  await test('menuVoices: light voice, pack voice, installed ids after, bad ids dropped', () => {
+    const { ctx } = load(null);
+    same(ctx.menuVoices(['test24', 'chaim', 'moshe']), ['chaim-light', 'chaim', 'test24', 'moshe']);
+    same(ctx.menuVoices(undefined), ['chaim-light', 'chaim']);
+    same(ctx.menuVoices(['', 'a\u0001b', 7, 'system', 'x'.repeat(61), 'ok']), ['chaim-light', 'chaim', 'ok']);
   });
 
   await test('menuChildren never exceeds 20 items and keeps the fixed items around the voices', () => {
@@ -80,7 +90,8 @@ async function test(name, fn) {
     const many = Array.from({ length: 30 }, (_, i) => 'v' + i);
     const children = ctx.menuChildren(many);
     assert.strictEqual(children.length, 20);
-    assert.strictEqual(children[children.length - 1].id, 'remove-voice-model');
+    assert.strictEqual(children[children.length - 2].id, 'remove-voice-model');
+    assert.strictEqual(children[children.length - 1].id, 'remove-light-model');
     assert.strictEqual(children.find(c => c.id === 'voice-system').title, 'קול לשמירה: אסף (של Windows)');
     assert.ok(children.some(c => c.id === 'voice-v0'));
     assert.strictEqual(new Set(children.map(c => c.id)).size, children.length);
@@ -137,6 +148,42 @@ async function test(name, fn) {
     assert.ok(speak, 'no /speak request');
     assert.strictEqual(speak.body.voice, 'test24');
     assert.strictEqual(speak.body.text, 'בראשית ברא');
+  });
+
+  await test('choosing the light voice offers its download with the size the service reports', async () => {
+    const requests = [];
+    const { handlers, calls, storage } = load((p, method) => {
+      requests.push({ p, method });
+      if (p === '/status') return [{ voices: ['chaim'], lightVoices: [], voiceModel: true, lightModel: false, lightModelSize: 68 * 1048576, lightPublished: true, nakdan: true }];
+      if (p === '/install-light-model') return [{ started: true }];
+      if (p === '/light-model-wait') return [{ state: 'done', received: 1, total: 1 }];
+      return [{}];
+    }, true);
+    handlers['plugin.boot']({ theme: {} });
+    await settle();
+    await handlers['reader.toolbar_item_clicked']({ itemId: 'voice-chaim-light' });
+    await settle();
+    assert.strictEqual(storage.mp3Voice, 'chaim-light');
+    const confirm = calls.find(c => c.method === 'ui.showConfirm');
+    assert.ok(confirm, 'no download confirmation');
+    assert.ok(confirm.payload.content.includes('68 מגה-בייט'), confirm.payload.content);
+    assert.ok(requests.some(r => r.p === '/install-light-model'), 'no install request');
+  });
+
+  await test('an unpublished light voice is explained, not downloaded', async () => {
+    const requests = [];
+    const { handlers, calls } = load((p) => {
+      requests.push(p);
+      if (p === '/status') return [{ voices: ['chaim'], lightVoices: [], voiceModel: true, lightModel: false, lightModelSize: 0, lightPublished: false, nakdan: true }];
+      return [{}];
+    });
+    handlers['plugin.boot']({ theme: {} });
+    await settle();
+    await handlers['reader.toolbar_item_clicked']({ itemId: 'voice-chaim-light' });
+    await settle();
+    assert.ok(!requests.includes('/install-light-model'));
+    const said = calls.filter(c => c.method === 'ui.showMessage').map(c => c.payload.message);
+    assert.ok(said.some(m => m.includes('עדיין לא פורסם')), JSON.stringify(said));
   });
 
   await test('the menu is refreshed when a voice is chosen and a new file appeared', async () => {

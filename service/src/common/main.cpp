@@ -5,6 +5,7 @@
 //   otzaria-voice --uninstall [--quiet] stop, remove login start and program files
 //   otzaria-voice --eval <manifest.jsonl> <out.jsonl>   accuracy evaluation
 //   otzaria-voice --narrate <models> <voice> <text.txt> <out dir>   reading-aloud test
+//   otzaria-voice --light <model.onnx> <text.txt> <out dir> [--raw]  light-voice test
 //   otzaria-voice --version
 //
 // Windows: started without arguments (double-clicked from a download) it
@@ -44,6 +45,15 @@ int run(const std::vector<std::string>& args) {
                                   platform::fromUtf8(args[4]), platform::fromUtf8(args[5]));
     } catch (const std::exception& ex) {
       platform::log(std::string("narrate: ") + ex.what());
+      return 3;
+    }
+  }
+  if (arg == "--light" && args.size() > 4) {
+    try {
+      return service::lightTest(platform::fromUtf8(args[2]), platform::fromUtf8(args[3]),
+                                platform::fromUtf8(args[4]), args.size() > 5 && args[5] == "--raw");
+    } catch (const std::exception& ex) {
+      platform::log(std::string("light: ") + ex.what());
       return 3;
     }
   }

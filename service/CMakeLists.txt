@@ -31,6 +31,8 @@ include_directories(${SRC_COMMON} ${SRC_DICTATION} ${SRC_TTS})
 set(COMMON_SOURCES
   ${SRC_COMMON}/audio.cpp
   ${SRC_DICTATION}/engine.cpp
+  ${SRC_TTS}/light.cpp
+  ${SRC_TTS}/nakdan.cpp
   ${SRC_TTS}/narrator.cpp
   ${SRC_TTS}/nikud_lexicon.cpp
   ${SRC_TTS}/voicemodel.cpp
