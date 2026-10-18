@@ -1113,7 +1113,9 @@ int vocalizeTest(const platform::Path& models, const platform::Path& text, const
                  bool withMarks) {
   const auto ort = platform::findOnnxRuntime();
   if (ort.empty()) throw std::runtime_error("ONNX Runtime not found");
-  narrator::Narrator n(ort, models, 4, 1);
+  // Only the diacritizer is needed: [models] is any folder with nakdan.onnx
+  // and nakdan_tokenizer.json (the pack, or a tiny diacritizer under test).
+  nakdan::Nakdan n(ort, models, 4);
   std::ifstream in(text, std::ios::binary);
   std::ofstream o(out, std::ios::binary);
   std::string line;

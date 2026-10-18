@@ -43,7 +43,14 @@ class TinyNakdan(nn.Module):
         self.additional = nn.Linear(2 * hidden, 3)
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
-        h, _ = self.lstm(self.drop(self.emb(input_ids)))
+        x = self.emb(input_ids)
+        # The service feeds the big model's three inputs; use the two extra
+        # ones (harmlessly) so that the ONNX export keeps them.
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(-1).to(x.dtype)
+        if token_type_ids is not None:
+            x = x + (token_type_ids.unsqueeze(-1) * 0).to(x.dtype)
+        h, _ = self.lstm(self.drop(x))
         h = self.drop(h)
         return self.nikud(h), self.shin(h), self.additional(h)
 
@@ -52,12 +59,13 @@ def load_examples(dataset_dir):
     examples = []
     for p in sorted(glob.glob(os.path.join(dataset_dir, "part-*.npz"))):
         z = np.load(p)
+        # Every z[name] re-reads the array from the zip: take each one once.
         off, src = z["offsets"], z["src"].tobytes().decode("ascii")
+        ids, nikud, shin = z["ids"].astype(np.int64), z["nikud"].astype(np.int64), z["shin"].astype(np.int64)
+        stress, shva = z["stress"].astype(np.float32), z["shva"].astype(np.float32)
         for i in range(len(off) - 1):
             a, b = off[i], off[i + 1]
-            examples.append((src[i], z["ids"][a:b].astype(np.int64), z["nikud"][a:b].astype(np.int64),
-                             z["shin"][a:b].astype(np.int64), z["stress"][a:b].astype(np.float32),
-                             z["shva"][a:b].astype(np.float32)))
+            examples.append((src[i], ids[a:b], nikud[a:b], shin[a:b], stress[a:b], shva[a:b]))
     return examples
 
 

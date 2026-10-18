@@ -31,9 +31,10 @@ void postQuit();
 int evaluate(const platform::Path& manifest, const platform::Path& out);
 
 // --vocalize <models> <text.txt> <out.txt> [--marks]: each line of the text
-// with nikud added (lexicon and diacritizer), for measuring the nikud's
-// accuracy; with --marks also the stress and vocal-shva marks (training
-// text for the light voice).
+// with nikud added (lexicon and diacritizer; [models] is any folder holding
+// nakdan.onnx, nakdan_tokenizer.json and optionally nikud_lexicon.bin), for
+// measuring the nikud's accuracy; with --marks also the stress and vocal-shva marks
+// (training text for the light voice).
 int vocalizeTest(const platform::Path& models, const platform::Path& text, const platform::Path& out,
                  bool withMarks);
 
