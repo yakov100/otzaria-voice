@@ -86,20 +86,32 @@ def main():
     ap.add_argument("--pack", default=os.path.join(os.environ.get("APPDATA", ""), "otzaria", "tts", "pack"))
     ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--part-bytes", type=int, default=9_000_000)
+    ap.add_argument("--out", default=None, help="dataset folder (default <work>/dataset)")
+    ap.add_argument("--exclude", default=None,
+                    help="a file of lines to keep out of the training set (the evaluation holdout), matched without marks")
     args = ap.parse_args()
+    excluded = set()
+    if args.exclude:
+        for line in open(args.exclude, encoding="utf-8"):
+            key = "".join(c for c in line if c not in MARKS and c != "|").strip()
+            if key:
+                excluded.add(key)
     tok = json.load(open(os.path.join(args.pack, "nakdan_tokenizer.json"), encoding="utf-8"))["model"]["vocab"]
     cls_id, sep_id, unk_id = tok["[CLS]"], tok["[SEP]"], tok["[UNK]"]
-    out_dir = os.path.join(args.work, "dataset")
+    out_dir = args.out or os.path.join(args.work, "dataset")
     os.makedirs(out_dir, exist_ok=True)
     shards_dir, teach_dir = os.path.join(args.work, "shards"), os.path.join(args.work, "out")
 
     examples = []  # (src, ids, nikud, shin, stress, shva)
-    counts = {"lines": 0, "letters": 0, "unclassed": 0, "by_src": {}}
+    counts = {"lines": 0, "letters": 0, "unclassed": 0, "by_src": {}, "excluded": 0}
     for name in sorted(f for f in os.listdir(teach_dir) if f.endswith(".txt")):
         lines = open(os.path.join(teach_dir, name), encoding="utf-8").read().split("\n")
         srcs = open(os.path.join(shards_dir, name[:-4] + ".src"), encoding="utf-8").read().split("\n")
         for line, src in zip(lines, srcs):
             if not line.strip():
+                continue
+            if excluded and "".join(c for c in line if c not in MARKS and c != "|").strip() in excluded:
+                counts["excluded"] += 1
                 continue
             chars, ids, nikud, shin, stress, shva = encode(line, tok, unk_id)
             # Cut at a space to --max-len - 2 tokens (room for [CLS] and [SEP]).
@@ -118,7 +130,7 @@ def main():
                 counts["by_src"][src] = counts["by_src"].get(src, 0) + (end - start)
                 start = end
     print(f"{counts['lines']} examples, {counts['letters']} labelled letters, {counts['unclassed']} letters "
-          f"outside the classes, chars by source {counts['by_src']}", file=sys.stderr)
+          f"outside the classes, {counts['excluded']} holdout lines excluded, chars by source {counts['by_src']}", file=sys.stderr)
 
     # Parts: concatenated arrays with offsets, each part under --part-bytes.
     part, part_bytes, n = [], 0, 0

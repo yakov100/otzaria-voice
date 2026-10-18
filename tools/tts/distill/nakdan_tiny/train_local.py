@@ -1,5 +1,5 @@
-"""Trains the tiny diacritizer on this computer's processor (the Colab notebook,
-train_colab.ipynb, does the same on a GPU): a character BiLSTM with the
+"""Trains the tiny diacritizer on this computer's processor, or on a GPU with
+--device cuda (the Colab notebook, train_colab.ipynb, does the same): a character BiLSTM with the
 three heads of nakdan.onnx, from the parts make_dataset.py wrote.
 
     python train_local.py [--work ...] [--run v1] [--epochs 12] [--batch 64] [--threads 12]
@@ -91,7 +91,7 @@ def buckets(data, batch_size):
     return [[data[j] for j in order[i:i + batch_size]] for i in range(0, len(order), batch_size)]
 
 
-def evaluate(model, dev_batches, pad):
+def evaluate(model, dev_batches, pad, device="cpu"):
     model.eval()
     right = {"nikud": 0, "shin": 0, "stress": 0, "shva": 0}
     total = dict(right)
@@ -99,7 +99,8 @@ def evaluate(model, dev_batches, pad):
     with torch.no_grad():
         for batch in dev_batches:
             b = collate(batch, pad)
-            n, s, a = model(b["ids"])
+            n, s, a = model(b["ids"].to(device))
+            n, s, a = n.cpu(), s.cpu(), a.cpu()
             pn, ps = n.argmax(-1), s.argmax(-1)
             pst, psh = (a[..., 0] > 0).float(), (a[..., 1] > 0).float()
             m = b["nikud"] >= 0
@@ -160,7 +161,9 @@ def main():
     ap.add_argument("--threads", type=int, default=12)
     ap.add_argument("--limit", type=int, default=0, help="batches per epoch (smoke test)")
     ap.add_argument("--export-only", action="store_true")
+    ap.add_argument("--device", default="cpu", help="cpu, cuda, or auto")
     args = ap.parse_args()
+    device = ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device
     torch.set_num_threads(args.threads)
     torch.manual_seed(7)
     random.seed(7)
@@ -176,9 +179,9 @@ def main():
     train_b, dev_b = buckets(train, args.batch), buckets(dev, args.batch)
     if args.limit:
         train_b, dev_b = train_b[:args.limit], dev_b[:max(1, args.limit // 10)]
-    log(logp, f"{len(train)} train / {len(dev)} dev examples, {len(train_b)} batches an epoch, {args.threads} threads")
+    log(logp, f"{len(train)} train / {len(dev)} dev examples, {len(train_b)} batches an epoch, {args.threads} threads, {device}")
 
-    model = TinyNakdan(meta["vocab_size"], pad)
+    model = TinyNakdan(meta["vocab_size"], pad).to(device)
     log(logp, f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=max(1, args.epochs * len(train_b)), pct_start=0.05)
@@ -187,7 +190,7 @@ def main():
     start_epoch = 0
     ckpts = sorted(glob.glob(os.path.join(out_dir, "epoch-*.pt")))
     if ckpts:
-        state = torch.load(ckpts[-1], map_location="cpu")
+        state = torch.load(ckpts[-1], map_location=device)
         model.load_state_dict(state["model"])
         if not args.export_only:
             opt.load_state_dict(state["opt"])
@@ -195,7 +198,7 @@ def main():
         start_epoch = state["epoch"] + 1
         log(logp, f"resumed from {ckpts[-1]}")
     if args.export_only:
-        export(model, meta, out_dir, logp, dev, pad)
+        export(model.cpu(), meta, out_dir, logp, dev, pad)
         return
 
     model.train()
@@ -204,7 +207,7 @@ def main():
         random.shuffle(order)
         t0, loss_sum, seen = time.time(), 0.0, 0
         for k, i in enumerate(order):
-            b = collate(train_b[i], pad)
+            b = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in collate(train_b[i], pad).items()}
             n, s, a = model(b["ids"])
             m = (b["nikud"] >= 0).float()
             loss = ce(n.reshape(-1, 29), b["nikud"].reshape(-1)) + 0.5 * ce(s.reshape(-1, 2), b["shin"].reshape(-1))
@@ -222,14 +225,14 @@ def main():
                 log(logp, f"epoch {epoch} step {seen}/{len(order)} loss {loss_sum / 100:.3f} "
                           f"({rate:.2f} s/step, {rate * (len(order) - seen) / 60:.0f} min left)")
                 loss_sum = 0.0
-        acc = evaluate(model, dev_b, pad)
+        acc = evaluate(model, dev_b, pad, device)
         log(logp, f"epoch {epoch} done in {(time.time() - t0) / 60:.1f} min; dev letters {acc['nikud']}% "
                   f"shin {acc['shin']}% stress {acc['stress']}% shva {acc['shva']}% by source {acc['by_src']}")
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
                     "epoch": epoch, "acc": acc}, os.path.join(out_dir, f"epoch-{epoch:02d}.pt"))
         for old in sorted(glob.glob(os.path.join(out_dir, "epoch-*.pt")))[:-2]:
             os.remove(old)
-    export(model, meta, out_dir, logp, dev, pad)
+    export(model.cpu(), meta, out_dir, logp, dev, pad)
     log(logp, "done")
 
 
