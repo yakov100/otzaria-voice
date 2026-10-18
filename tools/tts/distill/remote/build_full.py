@@ -63,6 +63,9 @@ def main():
                     shutil.copyfile(src, dst)
             with wave.open(dst) as w:
                 seconds += w.getnframes() / w.getframerate()
+            # Piper reads metadata.csv with csv.reader: a '"' opens a quoted field and swallows
+            # the following lines (13,123 lines became 11,578 rows). Quote marks are not spoken.
+            text = text.replace('"', "").replace("“", "").replace("”", "").replace("״", "")
             rows.append(f"{name}|{unicodedata.normalize('NFD', text)}")
             seen.add(name)
             n += 1
