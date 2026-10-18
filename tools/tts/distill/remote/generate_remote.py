@@ -80,6 +80,8 @@ def main():
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=0)
     ap.add_argument("--zip-every", type=int, default=200)
+    ap.add_argument("--ids-file", default=None, help="also generate these ids (one a line) from outside the range")
+    ap.add_argument("--load-only", action="store_true", help="load the model and the inputs, then exit (setup check)")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
@@ -91,13 +93,18 @@ def main():
         for meta, text in zip(tsv, voc):
             sid, source, book, _, _ = meta.rstrip("\n").split("\t", 4)
             rows.append((sid, source, book, text.rstrip("\n")))
-    rows = rows[args.start:args.end or None]
+    extra = set()
+    if args.ids_file:
+        extra = {l.strip() for l in open(args.ids_file, encoding="utf-8") if l.strip()}
+    rows = [r for r in rows if r[0] in extra] + rows[args.start:args.end or None]
     done = set()
     for z in glob.glob(f"{OUT}/clips_*.zip"):
         with zipfile.ZipFile(z) as zf:
             done.update(n[:-4] for n in zf.namelist() if n.endswith(".wav"))
     todo = [r for r in rows if r[0] not in done]
     print(f"{len(rows)} lines, {len(done)} done, {len(todo)} to do", flush=True)
+    if args.load_only:
+        return
     resample = torchaudio.transforms.Resample(model.sr, 22050).to("cuda")
     batch, meta, zip_index = {}, [], len(glob.glob(f"{OUT}/clips_*.zip"))
     t0, seconds_total = time.time(), 0.0
