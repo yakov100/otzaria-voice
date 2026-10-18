@@ -211,6 +211,26 @@ std::vector<std::string> pieces(const std::string& text) {
   return out;
 }
 
+std::vector<std::pair<size_t, size_t>> pieceSpans(const std::string& text, const std::vector<std::string>& pieces) {
+  const std::u32string s = toU32(text);
+  // UTF-16 offset of every code point (and of the end).
+  std::vector<size_t> u16(s.size() + 1, 0);
+  for (size_t i = 0; i < s.size(); i++) u16[i + 1] = u16[i] + (s[i] > 0xFFFF ? 2 : 1);
+  auto blank = [](char32_t c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+  std::vector<std::pair<size_t, size_t>> out;
+  size_t pos = 0;
+  for (const auto& piece : pieces) {
+    while (pos < s.size() && blank(s[pos])) pos++;
+    const size_t from = pos;
+    for (char32_t c : toU32(piece)) {
+      if (pos < s.size() && (s[pos] == c || (c == ' ' && blank(s[pos])))) pos++;
+      else break;
+    }
+    out.emplace_back(u16[from], u16[pos]);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- ONNX Runtime
 
 struct Narrator::Impl {

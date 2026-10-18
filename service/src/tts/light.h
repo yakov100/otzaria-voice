@@ -47,7 +47,8 @@ class LightVoice {
 
   // Speaks one piece of vocalized text (with marks): mono samples in -1..1
   // at sampleRate(). Characters the voice has no symbol for are skipped.
-  std::vector<float> speak(const std::string& text);
+  // [rate] above 1 speaks faster (the model's length scale divided by it).
+  std::vector<float> speak(const std::string& text, double rate = 1.0);
 
   // Exposed for tests: the symbol ids [text] becomes (bos, pad, each symbol
   // followed by pad, eos, as Piper's phonemes_to_ids makes them).

@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform.h"
@@ -70,6 +71,13 @@ platform::Path voicePath(const std::string& id);
 // The text split into sentences short enough for one generation each
 // (a sentence end, else a comma, else a space). UTF-8 in and out.
 std::vector<std::string> pieces(const std::string& text);
+
+// Where each of [pieces] (from pieces(text)) lies in [text]: [from, to) in
+// UTF-16 units, the offsets a plugin's JavaScript string uses. A piece is the
+// text's own characters with line breaks and tabs made spaces, so it is
+// found by walking the text; a piece that does not match ends where the
+// match stopped.
+std::vector<std::pair<size_t, size_t>> pieceSpans(const std::string& text, const std::vector<std::string>& pieces);
 
 class Narrator {
  public:

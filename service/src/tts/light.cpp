@@ -133,8 +133,9 @@ std::vector<int64_t> LightVoice::ids(const std::string& text) const {
   return out;
 }
 
-std::vector<float> LightVoice::speak(const std::string& text) {
+std::vector<float> LightVoice::speak(const std::string& text, double rate) {
   auto& o = *impl_;
+  float scales[3] = {o.scales[0], o.scales[1] / float(std::clamp(rate, 0.5, 3.0)), o.scales[2]};
   std::vector<int64_t> input = ids(text);
   if (input.size() <= o.bos.size() + o.pad.size() + o.eos.size()) return {};
   std::vector<int64_t> lengths{int64_t(input.size())};
@@ -142,7 +143,7 @@ std::vector<float> LightVoice::speak(const std::string& text) {
   std::vector<OrtValue*> in{
       o.rt.tensor(input.data(), input.size(), {1, int64_t(input.size())}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
       o.rt.tensor(lengths.data(), 1, {1}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
-      o.rt.tensor(o.scales, 3, {3}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
+      o.rt.tensor(scales, 3, {3}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)};
   std::vector<std::string> names{"input", "input_lengths", "scales"};
   if (o.multiSpeaker || o.inputNames.size() > 3) {
     in.push_back(o.rt.tensor(&sid, 1, {1}, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64));

@@ -50,7 +50,7 @@ endif()
 if(ANDROID)
   add_library(otzaria_voice SHARED
     ${COMMON_SOURCES} ${AUDIO_SOURCES} ${SRC_COMMON}/pack_android.cpp ${SRC_COMMON}/jni.cpp
-    ${SRC_TTS}/speech_none.cpp)
+    ${SRC_TTS}/speech_none.cpp ${SRC_TTS}/live_none.cpp)
   target_link_libraries(otzaria_voice PRIVATE log android)
   # Small and quick to load; nothing outside the JNI entry points is exported.
   set_target_properties(otzaria_voice PROPERTIES CXX_VISIBILITY_PRESET hidden)
@@ -62,7 +62,7 @@ if(WIN32)
   add_executable(otzaria-voice WIN32
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
     ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_win.cpp ${SRC_COMMON}/install_win.cpp
-    ${SRC_TTS}/speech_win.cpp)
+    ${SRC_TTS}/speech_win.cpp ${SRC_TTS}/live_win.cpp)
   target_compile_definitions(otzaria-voice PRIVATE UNICODE _UNICODE NDEBUG)
   # C++/WinRT (speech_win.cpp) under C++17 includes <experimental/coroutine>,
   # which newer MSVC refuses; with C++20 it uses <coroutine>.
@@ -80,7 +80,7 @@ if(WIN32)
 else()
   add_executable(otzaria-voice
     ${COMMON_SOURCES} ${AUDIO_SOURCES}
-    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_posix.cpp ${SRC_COMMON}/install_posix.cpp ${SRC_TTS}/speech_none.cpp)
+    ${SRC_COMMON}/main.cpp ${SRC_COMMON}/pack_posix.cpp ${SRC_COMMON}/install_posix.cpp ${SRC_TTS}/speech_none.cpp ${SRC_TTS}/live_none.cpp)
   find_package(Threads REQUIRED)
   target_link_libraries(otzaria-voice PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
   target_compile_options(otzaria-voice PRIVATE -O2 -Wall)

@@ -3,7 +3,8 @@
 // Listens on http://127.0.0.1:47811 only. A plugin starts dictation with
 // POST /dictate (network.fetchStream) and receives newline-delimited JSON while
 // the user speaks; POST /stop ends it after the last sentence is recognized.
-// POST /speak reads text aloud into an MP3 with the system voice (speech.h).
+// POST /speak reads text aloud into an MP3 with the system voice (speech.h);
+// POST /speak-live reads it to the speakers in a light voice (live.h).
 // Idle, the service holds no model and trims its memory; the model is loaded on
 // the first dictation and released after a few idle minutes.
 #define _CRT_SECURE_NO_WARNINGS
@@ -40,6 +41,7 @@
 
 #include "json.h"
 #include "light.h"
+#include "live.h"
 #include "nakdan.h"
 #include "narrator.h"
 #include "pack.h"
@@ -50,7 +52,7 @@
 
 namespace service {
 
-const char* kVersion = "2.4.0";
+const char* kVersion = "2.5.0";
 
 namespace {
 
@@ -506,6 +508,80 @@ void speakResult(Socket s) {
     sendAll(s, "0\r\n\r\n");
 }
 
+std::string liveStatus(const live::Status& st = live::status()) {
+  return "{\"state\":" + json::quote(st.state) + ",\"error\":" + json::quote(st.error) +
+         ",\"voice\":" + json::quote(st.voice) + ",\"segment\":" + std::to_string(st.segment) +
+         ",\"piece\":" + std::to_string(st.piece) + ",\"pieces\":" + std::to_string(st.pieces) +
+         ",\"from\":" + std::to_string(st.from) + ",\"to\":" + std::to_string(st.to) +
+         ",\"lastSegment\":" + std::to_string(st.lastSegment) + ",\"queued\":" + std::to_string(st.queued) + "}";
+}
+
+/**
+ * POST /speak-live {"text", "voice", "rate", "id"}: starts reading [text] to
+ * the speakers in a light voice, as segment [id] (a number the plugin
+ * chooses, 0 when absent). POST /speak-live-append {"text", "id"} adds the
+ * next segment to the reading.
+ */
+void speakLive(Socket s, const Request& req, bool append) {
+  if (!live::supported()) {
+    respond(s, 501, errorBody("unsupported", "live reading needs Windows"));
+    return;
+  }
+  std::string text, voice;
+  double rate = 1.0;
+  int64_t id = 0;
+  try {
+    auto b = json::parse(req.body);
+    text = b["text"].str();
+    if (b["rate"].kind == json::Value::Number) rate = b["rate"].num();
+    if (b["voice"].kind == json::Value::String) voice = b["voice"].str();
+    if (b["id"].kind == json::Value::Number) id = int64_t(b["id"].num());
+  } catch (...) {
+    respond(s, 400, errorBody("bad_request", "body must be JSON with a text"));
+    return;
+  }
+  std::string error;
+  if (!(append ? live::append(text, id, error) : live::start(text, voice, rate, id, error))) {
+    respond(s, error == "not_reading" ? 409 : 400, errorBody(error, "cannot read aloud live"));
+    return;
+  }
+  respond(s, 200, liveStatus());
+}
+
+/**
+ * POST /speak-live-wait: the live reading's status whenever the sentence
+ * heard (or the state) changes, and at least once a second, while it is
+ * loading or playing, for at most 100 seconds. As with /speak-wait, the open
+ * request keeps Otzaria from shutting the plugin's engine down meanwhile.
+ */
+void liveWait(Socket s) {
+  if (!sendAll(s,
+               "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\n"
+               "Transfer-Encoding: chunked\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"))
+    return;
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(100);
+  std::string last;
+  auto lastSent = std::chrono::steady_clock::now();
+  bool first = true;
+  while (true) {
+    const auto st = live::status();
+    const std::string status = liveStatus(st);
+    const auto now = std::chrono::steady_clock::now();
+    if (first || status != last || now - lastSent >= std::chrono::seconds(1)) {
+      const std::string data = status + "\n";
+      char size[16];
+      snprintf(size, sizeof size, "%zx\r\n", data.size());
+      if (!sendAll(s, std::string(size) + data + "\r\n")) return;
+      last = status;
+      lastSent = now;
+      first = false;
+    }
+    if ((st.state != "loading" && st.state != "playing") || now >= until) break;
+    platform::sleepMs(50);
+  }
+  sendAll(s, "0\r\n\r\n");
+}
+
 // ---------------------------------------------------------------- server
 
 std::atomic<bool> quitting{false};
@@ -561,7 +637,8 @@ void handle(Socket s) {
                   ",\"microphone\":" + (microphoneAllowed ? "true" : "false") +
                   ",\"loaded\":" + (loaded ? "true" : "false") +
                   ",\"busy\":" + (active ? "true" : "false") +
-                  ",\"speak\":" + (speech::supported() ? "true" : "false") + ",\"voiceModel\":" +
+                  ",\"speak\":" + (speech::supported() ? "true" : "false") +
+                  ",\"speakLive\":" + (live::supported() ? "true" : "false") + ",\"voiceModel\":" +
                   (narrator::modelReady() ? "true" : "false") + ",\"voiceModelSize\":" +
                   std::to_string(voicemodel::kRelease.size) + ",\"voiceModelJob\":" + voiceModelJob() +
                   ",\"lexicon\":" + (narrator::lexiconReady() ? "true" : "false") +
@@ -615,7 +692,10 @@ void handle(Socket s) {
     } else if (req.method == "POST" && req.path == "/install-voice-model") {
       // Nothing holds the model's files open between jobs; a running job is
       // cancelled so that the swap finds them closed.
-      voicemodel::startInstall([] { speech::cancel(); });
+      voicemodel::startInstall([] {
+        speech::cancel();
+        live::release();
+      });
       respond(s, 200, "{\"started\":true,\"voiceModelJob\":" + voiceModelJob() + "}");
     } else if (req.method == "POST" && req.path == "/remove-voice-model") {
       // Frees the model pack's space from inside Otzaria (the plugin's menu).
@@ -623,6 +703,7 @@ void handle(Socket s) {
         respond(s, 409, errorBody("busy", "wait for the download or the reading to end"));
       } else {
         speech::cancel();
+        live::release();
         const uint64_t freed = voicemodel::removeInstalled();
         respond(s, 200, "{\"removed\":true,\"freedBytes\":" + std::to_string(freed) + "}");
       }
@@ -634,7 +715,10 @@ void handle(Socket s) {
       if (!voicemodel::lightPublished()) {
         respond(s, 409, errorBody("not_published", "the light voice is not published yet"));
       } else {
-        voicemodel::startInstallLight([] { speech::cancel(); });
+        voicemodel::startInstallLight([] {
+          speech::cancel();
+          live::release();
+        });
         respond(s, 200, "{\"started\":true,\"lightModelJob\":" + lightModelJob() + "}");
       }
     } else if (req.method == "POST" && req.path == "/light-model-wait") {
@@ -644,6 +728,7 @@ void handle(Socket s) {
         respond(s, 409, errorBody("busy", "wait for the download or the reading to end"));
       } else {
         speech::cancel();
+        live::release();
         const uint64_t freed = voicemodel::removeLight();
         respond(s, 200, "{\"removed\":true,\"freedBytes\":" + std::to_string(freed) + "}");
       }
@@ -652,6 +737,23 @@ void handle(Socket s) {
     } else if (req.method == "POST" && req.path == "/speak-cancel") {
       speech::cancel();
       respond(s, 200, speakStatus());
+    } else if (req.method == "POST" && req.path == "/speak-live") {
+      speakLive(s, req, false);
+    } else if (req.method == "POST" && req.path == "/speak-live-append") {
+      speakLive(s, req, true);
+    } else if (req.method == "GET" && req.path == "/speak-live-status") {
+      respond(s, 200, liveStatus());
+    } else if (req.method == "POST" && req.path == "/speak-live-wait") {
+      liveWait(s);
+    } else if (req.method == "POST" && req.path == "/speak-live-pause") {
+      live::pause();
+      respond(s, 200, liveStatus());
+    } else if (req.method == "POST" && req.path == "/speak-live-resume") {
+      live::resume();
+      respond(s, 200, liveStatus());
+    } else if (req.method == "POST" && req.path == "/speak-live-stop") {
+      live::stop();
+      respond(s, 200, liveStatus());
     } else if (req.method == "POST" && req.path == "/quit") {
       respond(s, 200, "{\"quitting\":true}");
       requestQuit();
@@ -684,6 +786,7 @@ void idleLoop() {
     if (unloaded) platform::log("engine unloaded");
     // Trimming the working set also evicts the loaded model and the mapped
     // language model, which then page back in from disk on the next dictation.
+    live::trim();
     if (!active && idleEmpty) platform::trimMemory();
   }
 }
@@ -854,6 +957,7 @@ int serve() {
   listener = kNoSocket;
   idle.join();
   speech::cancel();
+  live::stop();
   platform::log("service stopped");
   platform::sleepMs(300);  // let the last responses go out
 #ifdef _WIN32

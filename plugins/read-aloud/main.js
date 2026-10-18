@@ -2,7 +2,9 @@
    הקראה קולית — headless Otzaria plugin.
 
    Reads the open text book aloud with the browser's speechSynthesis, section
-   by section, highlighting the word being spoken. Can also save a chapter or
+   by section, highlighting the word being spoken; with the light voice chosen
+   the local voice service reads it instead and the sentence being spoken is
+   highlighted (see readLive). Can also save a chapter or
    the selection as an MP3 (through the local voice service). Runs only in the background
    engine (no tab), so reading continues while the user looks at the book.
 
@@ -63,10 +65,14 @@ function voiceLabel(voice) {
   return (RECORDED_NAMES[voice] || voice) + ' (קול מוקלט)';
 }
 
-/** The menu title of a voice: 'קול לשמירה: חיים (מוקלט)', 'קול לשמירה: חיים קל (מהיר)'. */
+/**
+ * The menu title of a voice: 'קול: חיים קל (מהיר)', 'קול לשמירה: חיים (מוקלט)'.
+ * The system and light voices read aloud and save; a recorded voice is too
+ * slow to read live, so it only saves and reading stays in the system voice.
+ */
 function voiceMenuTitle(voice) {
-  if (!voice) return 'קול לשמירה: אסף (של Windows)';
-  if (isLightVoice(voice)) return 'קול לשמירה: ' + (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
+  if (!voice) return 'קול: אסף (של Windows)';
+  if (isLightVoice(voice)) return 'קול: ' + (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
   return 'קול לשמירה: ' + (RECORDED_NAMES[voice] || voice) + ' (מוקלט)';
 }
 
@@ -122,8 +128,10 @@ const state = {
   wordPos: 0,             // index into words of the last word spoken
   map: null,              // spoken offset -> original offset (see toSpeech)
   rate: 1.0,
-  mp3Voice: '',           // '' = the system voice; otherwise a recorded voice id
+  mp3Voice: '',           // '' = the system voice; otherwise a recorded or light voice id
   voice: null,
+  live: null,             // the reading the service speaks in a light voice (readLive)
+  livePaused: false,
   highlightColor: '#FFD54F66'
 };
 
@@ -464,7 +472,10 @@ function chunksOf(text, from, to) {
 
 /** Last word whose start <= utf16 offset (binary search). */
 function wordAt(offset) {
-  const w = state.words;
+  return wordIndex(state.words, offset);
+}
+
+function wordIndex(w, offset) {
   let lo = 0, hi = w.length - 1, ans = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
@@ -526,7 +537,18 @@ async function activeBookIs(bookId) {
  * stopped. Each await re-checks the generation so a stop wins immediately.
  */
 async function readFrom(bookId, sectionIndex, utf16) {
+  const voice = liveVoice();
+  if (voice) {
+    return readLive(sectionSegments(bookId, sectionIndex, utf16), voice,
+      async () => { if (await ensureVoice()) readFromSystem(bookId, sectionIndex, utf16); });
+  }
+  return readFromSystem(bookId, sectionIndex, utf16);
+}
+
+/** readFrom in the system voice, through the WebView's speechSynthesis. */
+async function readFromSystem(bookId, sectionIndex, utf16) {
   const gen = ++state.gen;
+  endLive();
   speechSynthesis.cancel();
   state.playing = true;
   state.bookId = bookId;
@@ -576,6 +598,7 @@ async function readFrom(bookId, sectionIndex, utf16) {
 async function stop(keepPosition) {
   state.gen++;
   if (window.speechSynthesis) speechSynthesis.cancel();
+  endLive();
   if (keepPosition) await savePosition();
   else await call('storage.remove', { key: 'position' });
   state.playing = false;
@@ -586,7 +609,17 @@ async function stop(keepPosition) {
 
 /** Speak plain text with no word tracking (fallback for selections). */
 function speakPlain(text) {
+  const voice = liveVoice();
+  if (voice) {
+    readLive(plainSegments(text), voice, async () => { if (await ensureVoice()) speakPlainSystem(text); });
+    return;
+  }
+  speakPlainSystem(text);
+}
+
+function speakPlainSystem(text) {
   const gen = ++state.gen;
+  endLive();
   speechSynthesis.cancel();
   state.playing = true;
   state.bookId = null;
@@ -622,10 +655,12 @@ async function ensureVoice() {
 async function toggle(ctx) {
   await settingsReady;
   if (state.playing) {
-    await stop(true);
+    if (state.live) await pauseLive();
+    else await stop(true);
     return;
   }
-  if (!(await ensureVoice())) return;
+  if (state.live && state.livePaused && await resumeLive()) return;
+  if (!liveVoice() && !(await ensureVoice())) return;
   if (ctx && ctx.currentType && ctx.currentType !== 'text') {
     message('הקראה זמינה בספרי טקסט בלבד (לא ב-PDF).');
     return;
@@ -648,7 +683,7 @@ async function toggle(ctx) {
 
 async function readSelection(ctx) {
   await settingsReady;
-  if (!(await ensureVoice())) return;
+  if (!liveVoice() && !(await ensureVoice())) return;
   const sel = ctx && ctx.selection;
   const sections = sel && Array.isArray(sel.sections) && sel.sections.length
     ? sel.sections
@@ -673,7 +708,16 @@ async function readSelection(ctx) {
 
 /** Read exactly the selected ranges (one per paragraph), with highlighting. */
 async function readRanges(sections) {
+  const voice = liveVoice();
+  if (voice) {
+    return readLive(rangeSegments(sections), voice, async () => { if (await ensureVoice()) readRangesSystem(sections); });
+  }
+  return readRangesSystem(sections);
+}
+
+async function readRangesSystem(sections) {
   const gen = ++state.gen;
+  endLive();
   speechSynthesis.cancel();
   state.playing = true;
   setToolbarPlaying(true);
@@ -696,6 +740,301 @@ async function readRanges(sections) {
     }
   }
   if (gen === state.gen) stop(false);
+}
+
+// ------------------------------------------------------ live, light voice
+//
+// With a light voice chosen, reading aloud goes through the local service,
+// which speaks to the speakers itself (the WebView's speechSynthesis has the
+// system voices only). The plugin hands it the text a section at a time,
+// one section ahead (POST /speak-live, then /speak-live-append), and follows
+// POST /speak-live-wait, which tells which sentence is being heard as an
+// offset range in the section's text: the sentence is highlighted, since the
+// light voice gives no word timings. Pausing pauses the service's playback;
+// a pause outlives this engine only through the saved position.
+
+/** The light voice to read aloud in, or null for the system voice. */
+function liveVoice() {
+  return isLightVoice(state.mp3Voice) ? state.mp3Voice : null;
+}
+
+/**
+ * The words that spoken offsets [from, to) of [seg] cover: { first, range },
+ * the range running from the first word's start to the last word's end.
+ */
+function sentenceRange(seg, from, to) {
+  if (!seg.words.length || !seg.map || !(to > from)) return null;
+  const orig = i => seg.map[Math.min(seg.base + i, seg.map.length - 1)];
+  const first = Math.max(0, wordIndex(seg.words, orig(from)));
+  const last = Math.max(first, wordIndex(seg.words, orig(to - 1)));
+  const a = seg.words[first].sourceRange || seg.words[first].renderedRange;
+  const b = seg.words[last].sourceRange || seg.words[last].renderedRange;
+  if (!a || !b) return null;
+  return { first, range: Object.assign({}, a, { end: b.end }) };
+}
+
+/**
+ * The book from (sectionIndex, utf16) on, a section per call: { bookId,
+ * sectionIndex, words, map, base, text, scroll } where text is what the
+ * voice reads (the section's spoken text from offset base). At the end,
+ * { end: true, note } with what to tell the user once the reading is over.
+ */
+function sectionSegments(bookId, sectionIndex, utf16) {
+  let section = sectionIndex;
+  let offset = utf16 || 0;
+  let empty = 0;
+  let first = true;
+  return async () => {
+    while (true) {
+      const here = section;
+      const from = offset;
+      const wasFirst = first;
+      const loaded = await loadSection(bookId, here);
+      section++; offset = 0; first = false;
+      if (loaded.error) {
+        // Past the last line, or the book went away.
+        return { end: true, note: wasFirst ? 'לא ניתן לקרוא את הקטע: ' + (loaded.error.message || '') : 'ההקראה הגיעה לסוף הספר.' };
+      }
+      if (!loaded.text.trim() || !loaded.words.length) {
+        if (++empty > MAX_EMPTY_SECTIONS) return { end: true, note: '' };
+        continue;
+      }
+      empty = 0;
+      const speech = toSpeech(loaded.text);
+      const base = toSpoken(speech.map, from);
+      const text = speech.text.slice(base);
+      if (!text.trim()) continue;
+      return { bookId, sectionIndex: here, words: loaded.words, map: speech.map, base, text, scroll: !wasFirst };
+    }
+  };
+}
+
+/** The selected ranges (one per paragraph), a range per call, as sectionSegments. */
+function rangeSegments(sections) {
+  let i = 0;
+  return async () => {
+    while (i < sections.length) {
+      const s = sections[i++];
+      const loaded = await loadSection(s.bookId, s.sectionIndex);
+      if (loaded.error) continue;
+      // Selection offsets are per layer; use the one matching the loaded text.
+      const range = (loaded.layer === 'source' ? s.sourceRange : s.renderedRange) || s.renderedRange;
+      const speech = toSpeech(loaded.text);
+      const from = toSpoken(speech.map, range.start && range.start.utf16 || 0);
+      const to = range.end && range.end.utf16 != null ? toSpoken(speech.map, range.end.utf16) : undefined;
+      const text = speech.text.slice(from, to);
+      if (!text.trim()) continue;
+      return { bookId: s.bookId, sectionIndex: s.sectionIndex, words: loaded.words, map: speech.map, base: from, text, scroll: false };
+    }
+    return { end: true, note: '' };
+  };
+}
+
+/** Text with no place in a book (nothing to highlight), as one segment. */
+function plainSegments(text) {
+  let given = false;
+  return async () => {
+    if (given) return { end: true, note: '' };
+    given = true;
+    return { bookId: null, sectionIndex: 0, words: [], map: null, base: 0, text: toSpeech(text).text, scroll: false };
+  };
+}
+
+/** Ends the service's live reading, if this engine started one. */
+function endLive() {
+  if (!state.live) return;
+  state.live = null;
+  state.livePaused = false;
+  serviceRequest('/speak-live-stop', 'POST').catch(() => {});
+}
+
+/**
+ * Reads the segments [nextSegment] gives in light voice [voice] through the
+ * service. When the service cannot (not running, too old for live reading)
+ * the user is told and [fallback] reads in the system voice instead.
+ */
+async function readLive(nextSegment, voice, fallback) {
+  const gen = ++state.gen;
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  const previous = state.live;  // replaced by the new reading, or stopped below
+  state.live = null;
+  state.livePaused = false;
+  state.playing = true;
+  setToolbarPlaying(true);
+  const seg = await nextSegment();
+  if (gen !== state.gen) return;
+  if (seg.end) {
+    if (previous) serviceRequest('/speak-live-stop', 'POST').catch(() => {});
+    if (seg.note) message(seg.note);
+    await stop(false);
+    return;
+  }
+  const ctx = { gen, voice, rate: state.rate, nextSegment, segs: new Map([[0, seg]]), lastId: 0, ended: false, note: '', appending: null, shown: '', current: null };
+  state.live = ctx;  // a stop meanwhile stops the service too
+  try {
+    await serviceRequest('/speak-live', 'POST', { text: seg.text, voice, rate: state.rate, id: 0 });
+  } catch (e) {
+    if (gen !== state.gen) return;
+    state.live = null;
+    state.playing = false;
+    await setToolbarPlaying(false);
+    const code = e && e.code;
+    if (code === 'light_model_missing') { offerLightModel(); return; }
+    if (code === 'nakdan_missing') { message(serviceProblem({ message: code })); return; }
+    message(code === 'not_found' || code === 'http_404'
+      ? 'שירות הדיבור המותקן ישן מדי להקראה בקול הקל, ולכן ההקראה בקול של Windows. יש לעדכן את התוסף "חיפוש בדיבור" ואת השירות שלו.'
+      : code === 'unsupported'
+        ? 'הקראה בקול הקל זמינה כרגע רק ב-Windows. ההקראה בקול של Windows.'
+        : 'שירות הדיבור אינו פועל, ולכן ההקראה בקול של Windows.');
+    if (gen === state.gen) fallback();
+    return;
+  }
+  if (gen !== state.gen) return;
+  state.bookId = seg.bookId;
+  state.sectionIndex = seg.sectionIndex;
+  state.words = seg.words;
+  state.map = seg.map;
+  state.wordPos = 0;
+  followLive(ctx);
+}
+
+/** Hands the service the next segment, or marks the end when there is none. */
+async function appendNext(ctx) {
+  const seg = await ctx.nextSegment();
+  if (ctx.gen !== state.gen) return;
+  if (seg.end) {
+    ctx.ended = true;
+    ctx.note = seg.note;
+    return;
+  }
+  const id = ctx.lastId + 1;
+  ctx.segs.set(id, seg);
+  try {
+    await serviceRequest('/speak-live-append', 'POST', { text: seg.text, id });
+    ctx.lastId = id;
+  } catch (_) {
+    ctx.segs.delete(id);
+    ctx.ended = true;  // the reading ends after what the service already has
+  }
+}
+
+function appendOnce(ctx) {
+  if (!ctx.appending) ctx.appending = appendNext(ctx).finally(() => { ctx.appending = null; });
+  return ctx.appending;
+}
+
+/** One status line of the live reading: highlight the sentence heard, keep a segment ahead. */
+function onLiveStatus(ctx, st) {
+  const seg = ctx.segs.get(st.segment);
+  if (seg && st.piece >= 0) {
+    const key = st.segment + ':' + st.piece;
+    if (key !== ctx.shown) {
+      ctx.shown = key;
+      const moved = seg !== ctx.current;
+      ctx.current = seg;
+      state.bookId = seg.bookId;
+      state.sectionIndex = seg.sectionIndex;
+      state.words = seg.words;
+      state.map = seg.map;
+      if (moved && seg.scroll && seg.bookId) {
+        activeBookIs(seg.bookId).then(yes => {
+          if (yes && ctx.gen === state.gen) call('reader.scrollToSection', { sectionIndex: seg.sectionIndex });
+        });
+      }
+      const r = sentenceRange(seg, st.from, st.to);
+      if (r) {
+        state.wordPos = r.first;
+        call('reader.setHighlight', {
+          highlightId: HIGHLIGHT_ID,
+          bookId: seg.bookId,
+          sectionIndex: seg.sectionIndex,
+          range: r.range,
+          style: { backgroundColor: state.highlightColor, borderRadius: 3, priority: 50 }
+        });
+      }
+    }
+    for (const id of Array.from(ctx.segs.keys())) if (id < st.segment) ctx.segs.delete(id);
+  }
+  if (!ctx.ended && st.queued === 0 && st.lastSegment === ctx.lastId && (st.state === 'playing' || st.state === 'loading')) {
+    appendOnce(ctx);
+  }
+}
+
+/**
+ * Follows the live reading until it ends, is paused or is replaced, one
+ * /speak-live-wait (up to 100 seconds) after another: the open request keeps
+ * Otzaria from shutting this engine down while the service reads.
+ */
+async function followLive(ctx) {
+  while (ctx.gen === state.gen) {
+    let st = null;
+    try {
+      await serviceRequest('/speak-live-wait', 'POST', null, obj => {
+        st = obj;
+        if (ctx.gen === state.gen) onLiveStatus(ctx, obj);
+      });
+    } catch (_) {
+      st = null;
+    }
+    if (ctx.gen !== state.gen) return;
+    if (!st) {
+      message('ההקראה נעצרה: שירות הדיבור אינו מגיב.');
+      await stop(true);
+      return;
+    }
+    if (st.state === 'paused') return;  // toggle resumes it
+    if (st.state === 'loading' || st.state === 'playing') continue;
+    if (st.state === 'done' && (ctx.appending || !ctx.ended)) {
+      // Everything handed over was said before the next section was: hand it now.
+      await appendOnce(ctx);
+      continue;
+    }
+    if (st.state === 'done') {
+      if (ctx.note) message(ctx.note);
+      await stop(false);
+      return;
+    }
+    if (st.state === 'error') {
+      if (st.error === 'light_model_missing') offerLightModel();
+      else message(st.error === 'no_audio_device' ? 'לא נמצא רמקול או אוזניות לניגון ההקראה.'
+        : serviceProblem({ message: st.error }) || 'ההקראה בקול הקל נכשלה: ' + st.error);
+    }
+    await stop(st.state !== 'error');  // idle: stopped from elsewhere
+    return;
+  }
+}
+
+async function pauseLive() {
+  try {
+    await serviceRequest('/speak-live-pause', 'POST');
+  } catch (_) {
+    await stop(true);
+    return;
+  }
+  state.playing = false;
+  state.livePaused = true;
+  await savePosition();
+  await setToolbarPlaying(false);
+  call('plugin.backgroundDone');
+}
+
+/** Resumes a paused live reading; false when it cannot (then it starts afresh). */
+async function resumeLive() {
+  const ctx = state.live;
+  if (!ctx || ctx.voice !== liveVoice() || ctx.rate !== state.rate) return false;
+  let st = null;
+  try {
+    const lines = await serviceRequest('/speak-live-resume', 'POST');
+    st = lines[lines.length - 1];
+  } catch (_) {
+    return false;
+  }
+  if (!st || !['playing', 'loading', 'done'].includes(st.state) || state.live !== ctx) return false;
+  state.playing = true;
+  state.livePaused = false;
+  setToolbarPlaying(true);
+  followLive(ctx);
+  return true;
 }
 
 /**
@@ -725,7 +1064,9 @@ async function refreshVoiceMenu(status) {
 async function setVoice(voice) {
   state.mp3Voice = voice;
   await call('storage.set', { key: 'mp3Voice', value: state.mp3Voice });
-  message('הקול לשמירה כ-MP3: ' + voiceLabel(voice));
+  message(voice && !isLightVoice(voice)
+    ? 'הקול לשמירה כ-MP3: ' + voiceLabel(voice) + '. ההקראה בקול נשארת בקול של Windows.'
+    : 'הקול להקראה ולשמירה כ-MP3: ' + voiceLabel(voice));
   let st = null;
   try {
     st = await serviceStatus();
@@ -772,7 +1113,7 @@ async function removeLightModel() {
       await call('storage.set', { key: 'mp3Voice', value: '' });
     }
     message('הקול הקל הוסר' + (mb ? ' (פונו ' + mb + ' מגה-בייט)' : '') + '.' +
-      (isLightVoice(state.mp3Voice) ? '' : ' הקול לשמירה כ-MP3 הוא עכשיו ' + voiceLabel(state.mp3Voice) + '.'));
+      (isLightVoice(state.mp3Voice) ? '' : ' הקול להקראה ולשמירה הוא עכשיו ' + voiceLabel(state.mp3Voice) + '.'));
     refreshVoiceMenu();
   } catch (e) {
     message(e && e.code === 'busy' ? 'יש להמתין לסיום ההורדה או השמירה, ואז לנסות שוב.' : 'ההסרה נכשלה: ' + String((e && e.message) || e));
@@ -833,7 +1174,7 @@ async function offerLightModel(status) {
     }
     showExportProgress(null);
     if (job && job.state === 'done') {
-      message('הקול הקל הותקן. אפשר לשמור כ-MP3.');
+      message('הקול הקל הותקן. אפשר להקריא בו ולשמור כ-MP3.');
       refreshVoiceMenu();
     } else {
       message('הורדת הקול הקל נכשלה: ' + ((job && job.error) || 'שגיאה לא ידועה'));

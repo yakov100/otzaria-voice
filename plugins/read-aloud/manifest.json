@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "org.otzaria.read-aloud",
   "name": "הקראה קולית",
-  "version": "1.2.0",
-  "description": "מקריא בקול את הספר הפתוח ומדגיש את המילה הנקראת, ושומר פרק או קטע מסומן כקובץ MP3, בקול של Windows, בקול מוקלט, או בקול הקל והמהיר. עובד בלי אינטרנט.",
+  "version": "1.3.0",
+  "description": "מקריא בקול את הספר הפתוח ומדגיש את הנקרא, ושומר פרק או קטע מסומן כקובץ MP3, בקול של Windows, בקול הקל והמהיר, או בקול מוקלט. עובד בלי אינטרנט.",
   "author": "yakov100",
   "homepage": "https://github.com/yakov100/otzaria-voice",
   "entrypoint": "main.js",
@@ -88,11 +88,11 @@
             },
             {
               "id": "voice-system",
-              "title": "קול לשמירה: אסף (של Windows)"
+              "title": "קול: אסף (של Windows)"
             },
             {
               "id": "voice-chaim-light",
-              "title": "קול לשמירה: חיים קל (מהיר)"
+              "title": "קול: חיים קל (מהיר)"
             },
             {
               "id": "voice-chaim",

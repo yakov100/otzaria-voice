@@ -72,7 +72,7 @@ async function test(name, fn) {
   await test('light voices are labelled as fast and have their own remove item', () => {
     const { ctx } = load(null);
     const children = ctx.menuChildren(['chaim-light', 'chaim']);
-    assert.strictEqual(children.find(c => c.id === 'voice-chaim-light').title, 'קול לשמירה: חיים קל (מהיר)');
+    assert.strictEqual(children.find(c => c.id === 'voice-chaim-light').title, 'קול: חיים קל (מהיר)');
     assert.strictEqual(children[children.length - 1].id, 'remove-light-model');
     assert.strictEqual(ctx.voiceOfItem('voice-chaim-light'), 'chaim-light');
     same(ctx.menuVoices(['chaim'], ['chaim-light', 'moshe-light']), ['chaim-light', 'chaim', 'moshe-light']);
@@ -92,7 +92,7 @@ async function test(name, fn) {
     assert.strictEqual(children.length, 20);
     assert.strictEqual(children[children.length - 2].id, 'remove-voice-model');
     assert.strictEqual(children[children.length - 1].id, 'remove-light-model');
-    assert.strictEqual(children.find(c => c.id === 'voice-system').title, 'קול לשמירה: אסף (של Windows)');
+    assert.strictEqual(children.find(c => c.id === 'voice-system').title, 'קול: אסף (של Windows)');
     assert.ok(children.some(c => c.id === 'voice-v0'));
     assert.strictEqual(new Set(children.map(c => c.id)).size, children.length);
   });
@@ -140,7 +140,7 @@ async function test(name, fn) {
     await handlers['reader.toolbar_item_clicked']({ itemId: 'voice-test24' });
     assert.strictEqual(storage.mp3Voice, 'test24');
     const said = calls.filter(c => c.method === 'ui.showMessage').map(c => c.payload.message);
-    assert.ok(said.includes('הקול לשמירה כ-MP3: test24 (קול מוקלט)'), 'message: ' + JSON.stringify(said));
+    assert.ok(said.includes('הקול לשמירה כ-MP3: test24 (קול מוקלט). ההקראה בקול נשארת בקול של Windows.'), 'message: ' + JSON.stringify(said));
     storage.mp3Folder = 'C:\\out';
     handlers['reader.context_menu_item_clicked']({ itemId: 'tts-save-selection', selectedText: 'בראשית ברא', currentBook: 'בראשית' });
     await settle();
