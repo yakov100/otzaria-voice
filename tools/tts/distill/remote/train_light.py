@@ -73,6 +73,9 @@ def export_and_listen(out, data_dir):
     last = sorted(glob.glob(f"{out}/ckpt/*.ckpt"), key=os.path.getmtime)[-1]
     sh(f'python3 -m piper.train.export_onnx --checkpoint "{last}" --output-file {out}/chaim-light.onnx')
     cfg = json.load(open(f"{out}/chaim-light.json", encoding="utf-8"))
+    # The speaker chose these on the pilot (18.10): less noise reads cleaner and sharper.
+    cfg["inference"] = {"noise_scale": 0.333, "length_scale": 1.0, "noise_w": 0.6}
+    json.dump(cfg, open(f"{out}/chaim-light.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     id_map = cfg["phoneme_id_map"]
     sess = ort.InferenceSession(f"{out}/chaim-light.onnx")
 
@@ -84,7 +87,7 @@ def export_and_listen(out, data_dir):
         ids += id_map.get("$", [])
         x = np.array([ids], dtype=np.int64)
         return sess.run(None, {"input": x, "input_lengths": np.array([x.shape[1]], dtype=np.int64),
-                               "scales": np.array([0.667, 1.0, 0.8], dtype=np.float32)})[0].squeeze()
+                               "scales": np.array([cfg["inference"]["noise_scale"], cfg["inference"]["length_scale"], cfg["inference"]["noise_w"]], dtype=np.float32)})[0].squeeze()
 
     os.makedirs(f"{out}/samples", exist_ok=True)
     rate = cfg["audio"]["sample_rate"]
