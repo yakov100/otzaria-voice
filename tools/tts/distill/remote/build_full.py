@@ -26,13 +26,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", default="/workspace/gen/in")
     ap.add_argument("--out", default="/workspace/gen")
+    ap.add_argument("--max-seconds", type=float, default=18.0,
+                    help="longer clips are left out (batch 32 with 26 s clips ran a 4090 out of memory)")
     args = ap.parse_args()
     tests = set()
     test_path = os.path.join(args.out, "test_sentences.txt")
     if os.path.exists(test_path):
         tests = {key(l) for l in open(test_path, encoding="utf-8") if l.strip()}
     os.makedirs(os.path.join(args.out, "wavs"), exist_ok=True)
-    rows, seen, skipped, seconds, per_machine = [], set(), {"test": 0, "real": 0, "dup": 0, "missing": 0}, 0.0, {}
+    rows, seen, skipped, seconds, per_machine = [], set(), {"test": 0, "real": 0, "dup": 0, "missing": 0, "long": 0}, 0.0, {}
     for meta in sorted(glob.glob(os.path.join(args.inp, "*", "metadata.csv"))):
         machine = os.path.basename(os.path.dirname(meta))
         n = 0
@@ -54,6 +56,12 @@ def main():
             if not os.path.exists(src):
                 skipped["missing"] += 1
                 continue
+            with wave.open(src) as w:
+                length = w.getnframes() / w.getframerate()
+            if length > args.max_seconds:
+                skipped["long"] += 1
+                continue
+            seconds += length
             dst = os.path.join(args.out, "wavs", name)
             if not os.path.exists(dst):
                 try:
@@ -61,8 +69,6 @@ def main():
                 except OSError:
                     import shutil
                     shutil.copyfile(src, dst)
-            with wave.open(dst) as w:
-                seconds += w.getnframes() / w.getframerate()
             # Piper reads metadata.csv with csv.reader: a '"' opens a quoted field and swallows
             # the following lines (13,123 lines became 11,578 rows). Quote marks are not spoken.
             text = text.replace('"', "").replace("“", "").replace("”", "").replace("״", "")
