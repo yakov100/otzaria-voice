@@ -88,6 +88,8 @@ def main():
     args = ap.parse_args()
     out_dir = args.out
     os.makedirs(out_dir, exist_ok=True)
+    if os.environ.get("OMP_NUM_THREADS"):  # several processes on a CPU quota: unlimited threads thrash
+        torch.set_num_threads(int(os.environ["OMP_NUM_THREADS"]))
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
     model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
     model.prepare_conditionals(f"{IN}/ref.wav", exaggeration=0.5)
@@ -100,11 +102,16 @@ def main():
     extra = set()
     if args.ids_file:
         extra = {l.strip() for l in open(args.ids_file, encoding="utf-8") if l.strip()}
-    rows = [r for r in rows if r[0] in extra] + rows[args.start:args.end or None]
+    # --end -1: only the ids in --ids-file (the leftovers, split between machines)
+    rows = [r for r in rows if r[0] in extra] + (rows[args.start:args.end or None] if args.end >= 0 else [])
     done = set()
-    for z in set(glob.glob(f"{OUT}/clips_*.zip")) | set(glob.glob(f"{out_dir}/clips_*.zip")):
-        with zipfile.ZipFile(z) as zf:
-            done.update(n[:-4] for n in zf.namelist() if n.endswith(".wav"))
+    # every zip on the machine (the ranges get re-split between processes)
+    for z in set(glob.glob(f"{OUT}/**/clips_*.zip", recursive=True)) | set(glob.glob(f"{out_dir}/clips_*.zip")):
+        try:
+            with zipfile.ZipFile(z) as zf:
+                done.update(n[:-4] for n in zf.namelist() if n.endswith(".wav"))
+        except zipfile.BadZipFile:  # another process is writing it right now
+            pass
     todo = [r for r in rows if r[0] not in done]
     print(f"{len(rows)} lines, {len(done)} done, {len(todo)} to do", flush=True)
     if args.load_only:

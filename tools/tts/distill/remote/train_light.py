@@ -110,6 +110,7 @@ def main():
     ap.add_argument("--zip", default=None, help="dataset.zip or dataset-flac.zip (default: the one in /workspace/data)")
     ap.add_argument("--data", default="/workspace/data/set")
     ap.add_argument("--export-only", action="store_true")
+    ap.add_argument("--devices", type=int, default=1, help="GPUs (DDP); the batch is per GPU")
     args = ap.parse_args()
     out = f"/workspace/runs/{args.run}"
     os.makedirs(f"{out}/ckpt", exist_ok=True)
@@ -127,6 +128,8 @@ def main():
     ckpts = sorted(glob.glob(f"{out}/ckpt/*.ckpt"), key=os.path.getmtime)
     start = f'--ckpt_path "{ckpts[-1]}"' if ckpts else f'--model.warmstart_ckpt "{base_checkpoint(args.base)}"'
     print("starting with", start, flush=True)
+    multi = (f"--trainer.devices {args.devices} --trainer.strategy ddp_find_unused_parameters_true"
+             if args.devices > 1 else "")
     sh(f"""python3 -m piper.train fit \
   --data.voice_name chaim-light \
   --data.csv_path {args.data}/metadata.csv \
@@ -140,6 +143,7 @@ def main():
   --data.batch_size {args.batch} \
   --data.num_workers 4 \
   --trainer.max_epochs {args.epochs} \
+  {multi} \
   --trainer.default_root_dir /workspace/lightning \
   --trainer.callbacks+=ModelCheckpoint \
   --trainer.callbacks.dirpath {out}/ckpt \

@@ -18,7 +18,7 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('ivr
 while pgrep -f generate_remote.py >/dev/null; do sleep 60; done
 echo "generation ended $(date -u +%H:%M): $(grep -al "done" /workspace/gen*.log | wc -l) of $(ls /workspace/gen*.log | wc -l) logs say done"
 # several processes per GPU (restart_parallel.sh) wrote into p2, p3, ...: gather their zips
-for z in $WORK/p*/clips_*.zip; do [ -e "$z" ] && mv "$z" "$WORK/clips_$(basename "$(dirname "$z")")_${z##*/clips_}"; done
+for z in $WORK/*/clips_*.zip; do [ -e "$z" ] && mv "$z" "$WORK/clips_$(basename "$(dirname "$z")")_${z##*/clips_}"; done
 python /workspace/tools/qc_remote.py --work $WORK > /workspace/qc.log 2>&1 || { tail -5 /workspace/qc.log; echo QC_FAILED; exit 1; }
 mkdir -p $OUT/wavs
 cp $WORK/metadata.csv $WORK/qc.json $WORK/clips.jsonl $WORK/rejected.jsonl $OUT/
