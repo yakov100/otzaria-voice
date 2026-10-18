@@ -16,7 +16,9 @@ done
 python -c "import faster_whisper, ctranslate2; print('faster-whisper ok, cuda devices', ctranslate2.get_cuda_device_count())"
 python -c "from huggingface_hub import snapshot_download; snapshot_download('ivrit-ai/whisper-large-v3-turbo-ct2')" && echo "whisper model cached"
 while pgrep -f generate_remote.py >/dev/null; do sleep 60; done
-grep -aq "done" /workspace/gen.log && echo "generation done $(date -u +%H:%M)" || echo "GEN_NOT_DONE (process gone without 'done'); QC runs on what exists"
+echo "generation ended $(date -u +%H:%M): $(grep -al "done" /workspace/gen*.log | wc -l) of $(ls /workspace/gen*.log | wc -l) logs say done"
+# several processes per GPU (restart_parallel.sh) wrote into p2, p3, ...: gather their zips
+for z in $WORK/p*/clips_*.zip; do [ -e "$z" ] && mv "$z" "$WORK/clips_$(basename "$(dirname "$z")")_${z##*/clips_}"; done
 python /workspace/tools/qc_remote.py --work $WORK > /workspace/qc.log 2>&1 || { tail -5 /workspace/qc.log; echo QC_FAILED; exit 1; }
 mkdir -p $OUT/wavs
 cp $WORK/metadata.csv $WORK/qc.json $WORK/clips.jsonl $WORK/rejected.jsonl $OUT/

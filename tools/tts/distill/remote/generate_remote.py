@@ -15,6 +15,8 @@ import io
 import json
 import os
 import re
+import signal
+import sys
 import time
 import zipfile
 
@@ -82,8 +84,10 @@ def main():
     ap.add_argument("--zip-every", type=int, default=200)
     ap.add_argument("--ids-file", default=None, help="also generate these ids (one a line) from outside the range")
     ap.add_argument("--load-only", action="store_true", help="load the model and the inputs, then exit (setup check)")
+    ap.add_argument("--out", default=OUT, help="output folder (several processes share one GPU, each with its own)")
     args = ap.parse_args()
-    os.makedirs(OUT, exist_ok=True)
+    out_dir = args.out
+    os.makedirs(out_dir, exist_ok=True)
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
     model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
     model.prepare_conditionals(f"{IN}/ref.wav", exaggeration=0.5)
@@ -98,7 +102,7 @@ def main():
         extra = {l.strip() for l in open(args.ids_file, encoding="utf-8") if l.strip()}
     rows = [r for r in rows if r[0] in extra] + rows[args.start:args.end or None]
     done = set()
-    for z in glob.glob(f"{OUT}/clips_*.zip"):
+    for z in set(glob.glob(f"{OUT}/clips_*.zip")) | set(glob.glob(f"{out_dir}/clips_*.zip")):
         with zipfile.ZipFile(z) as zf:
             done.update(n[:-4] for n in zf.namelist() if n.endswith(".wav"))
     todo = [r for r in rows if r[0] not in done]
@@ -106,7 +110,7 @@ def main():
     if args.load_only:
         return
     resample = torchaudio.transforms.Resample(model.sr, 22050).to("cuda")
-    batch, meta, zip_index = {}, [], len(glob.glob(f"{OUT}/clips_*.zip"))
+    batch, meta, zip_index = {}, [], len(glob.glob(f"{out_dir}/clips_*.zip"))
     t0, seconds_total = time.time(), 0.0
 
     def flush_zip():
@@ -119,11 +123,16 @@ def main():
                 zf.writestr(sid + ".wav", wav)
             zf.writestr("clips.jsonl", "\n".join(json.dumps(m, ensure_ascii=False) for m in meta) + "\n")
         zip_index += 1
-        with open(f"{OUT}/clips_{zip_index:04d}.zip", "wb") as f:
+        with open(f"{out_dir}/clips_{zip_index:04d}.zip", "wb") as f:
             f.write(buf.getvalue())
         print(f"  wrote clips_{zip_index:04d}.zip ({len(batch)} clips); {seconds_total / 3600:.2f} h of audio "
               f"in {(time.time() - t0) / 3600:.2f} h", flush=True)
         batch, meta = {}, []
+
+    def on_term(*_):  # a kill keeps the clips made since the last zip
+        flush_zip()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, on_term)
 
     with torch.inference_mode():
         for i, (sid, source, book, text) in enumerate(todo, 1):
