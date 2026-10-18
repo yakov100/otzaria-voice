@@ -144,10 +144,14 @@ def main():
     with torch.inference_mode():
         for i, (sid, source, book, text) in enumerate(todo, 1):
             parts = []
-            for piece in pieces(MARKS.sub("", text)):
-                wav = model.generate(piece, language_id="he", exaggeration=0.5, cfg_weight=0.5)
-                parts.append(resample(wav.to("cuda")).squeeze(0).cpu().numpy())
-                parts.append(np.zeros(22050 // 6, dtype=np.float32))
+            try:
+                for piece in pieces(MARKS.sub("", text)):
+                    wav = model.generate(piece, language_id="he", exaggeration=0.5, cfg_weight=0.5)
+                    parts.append(resample(wav.to("cuda")).squeeze(0).cpu().numpy())
+                    parts.append(np.zeros(22050 // 6, dtype=np.float32))
+            except (IndexError, RuntimeError) as e:  # Chatterbox's alignment check fails on some lines: skip the line
+                print(f"skipped {sid}: {e}", flush=True)
+                continue
             x = trim(np.concatenate(parts[:-1]), 22050)
             peak = float(np.abs(x).max()) if len(x) else 0.0
             if peak > 0:
