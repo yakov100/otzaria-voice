@@ -1,5 +1,7 @@
 #include "light.h"
 
+#include <cmath>
+
 #include <algorithm>
 #include <filesystem>
 #include <set>
@@ -68,6 +70,7 @@ struct LightVoice::Impl {
   std::vector<std::string> inputNames, outputNames;
   bool multiSpeaker = false;
   std::set<char32_t> warned;  // characters without a symbol, logged once each
+  std::vector<float> lowpass;  // FIR taps (inference.lowpass_hz); empty = none
 
   Impl(const Path& ortLibrary) : rt(ortLibrary, "otzaria-light") {}
   ~Impl() { rt.close(session); }
@@ -101,6 +104,26 @@ LightVoice::LightVoice(const Path& ortLibrary, const Path& model, int threads)
   if (inf["length_scale"].kind == json::Value::Number) o.scales[1] = float(inf["length_scale"].num());
   if (inf["noise_w"].kind == json::Value::Number) o.scales[2] = float(inf["noise_w"].num());
   if (doc["num_speakers"].kind == json::Value::Number) o.multiSpeaker = doc["num_speakers"].num() > 1;
+  // A small VITS decoder adds a buzz around 6-8 kHz that its teacher does not
+  // have (the voice sounds metallic); the speaker chose a fade from 5.5 to
+  // 6.5 kHz by ear (19.10). inference.lowpass_hz is the middle of the fade.
+  if (inf["lowpass_hz"].kind == json::Value::Number) {
+    const double fc = inf["lowpass_hz"].num() / o.sampleRate;  // cycles per sample
+    const double width = (inf["lowpass_width_hz"].kind == json::Value::Number ? inf["lowpass_width_hz"].num() : 1000.0) / o.sampleRate;
+    int n = int(std::ceil(5.5 / width)) | 1;  // Blackman: transition ~5.5/N
+    n = std::clamp(n, 31, 511);
+    o.lowpass.resize(size_t(n));
+    const double pi = 3.14159265358979323846;
+    double sum = 0;
+    for (int i = 0; i < n; ++i) {
+      const double t = i - (n - 1) / 2.0;
+      const double sinc = t == 0 ? 2 * fc : std::sin(2 * pi * fc * t) / (pi * t);
+      const double w = 0.42 - 0.5 * std::cos(2 * pi * i / (n - 1)) + 0.08 * std::cos(4 * pi * i / (n - 1));
+      o.lowpass[size_t(i)] = float(sinc * w);
+      sum += sinc * w;
+    }
+    for (auto& v : o.lowpass) v = float(v / sum);  // unity gain at 0 Hz
+  }
   o.session = o.rt.open(model, threads);
   o.inputNames = o.rt.names(o.session, true);
   o.outputNames = o.rt.names(o.session, false);
@@ -155,7 +178,18 @@ std::vector<float> LightVoice::speak(const std::string& text, double rate) {
   size_t count = 1;
   for (int64_t d : o.rt.shapeOf(out[0])) count *= size_t(d);
   const float* data = o.rt.dataOf<float>(out[0]);
-  return std::vector<float>(data, data + count);
+  if (o.lowpass.empty()) return std::vector<float>(data, data + count);
+  // the filter, centred (no delay), zeros beyond the ends
+  const size_t n = o.lowpass.size(), half = n / 2;
+  std::vector<float> y(count, 0.0f);
+  for (size_t i = 0; i < count; ++i) {
+    const size_t k0 = i + half >= count ? i + half - count + 1 : 0;
+    const size_t k1 = std::min(n, i + half + 1);
+    float acc = 0.0f;
+    for (size_t k = k0; k < k1; ++k) acc += o.lowpass[k] * data[i + half - k];
+    y[i] = acc;
+  }
+  return y;
 }
 
 }  // namespace light

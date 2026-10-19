@@ -78,7 +78,8 @@ def export_and_listen(out, data_dir):
     cfg = json.load(open(f"{out}/chaim-light.json", encoding="utf-8"))
     # The speaker chose these (18-19.10): less noise reads cleaner and sharper; 1.0 spoke ~25%
     # faster than Chatterbox and blurred words, 1.4 matches it.
-    cfg["inference"] = {"noise_scale": 0.333, "length_scale": 1.4, "noise_w": 0.6}
+    cfg["inference"] = {"noise_scale": 0.333, "length_scale": 1.4, "noise_w": 0.6,
+                        "lowpass_hz": 6000, "lowpass_width_hz": 1000}  # see light.cpp
     json.dump(cfg, open(f"{out}/chaim-light.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     id_map = cfg["phoneme_id_map"]
     sess = ort.InferenceSession(f"{out}/chaim-light.onnx")
