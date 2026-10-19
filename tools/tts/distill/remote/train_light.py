@@ -73,8 +73,9 @@ def export_and_listen(out, data_dir):
     last = sorted(glob.glob(f"{out}/ckpt/*.ckpt"), key=os.path.getmtime)[-1]
     sh(f'python3 -m piper.train.export_onnx --checkpoint "{last}" --output-file {out}/chaim-light.onnx')
     cfg = json.load(open(f"{out}/chaim-light.json", encoding="utf-8"))
-    # The speaker chose these on the pilot (18.10): less noise reads cleaner and sharper.
-    cfg["inference"] = {"noise_scale": 0.333, "length_scale": 1.0, "noise_w": 0.6}
+    # The speaker chose these (18-19.10): less noise reads cleaner and sharper; 1.0 spoke ~25%
+    # faster than Chatterbox and blurred words, 1.4 matches it.
+    cfg["inference"] = {"noise_scale": 0.333, "length_scale": 1.4, "noise_w": 0.6}
     json.dump(cfg, open(f"{out}/chaim-light.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     id_map = cfg["phoneme_id_map"]
     sess = ort.InferenceSession(f"{out}/chaim-light.onnx")
