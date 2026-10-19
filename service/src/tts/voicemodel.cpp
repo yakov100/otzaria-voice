@@ -197,8 +197,8 @@ const pack::Release kLight = {
 const pack::Release kNakdanPack = {
     1,
     "https://github.com/yakov100/otzaria-voice/releases/download/light-voice-v1/nakdan-v1.zip",
-    0,
-    "",
+    4634758,  // the small diacritizer (4.3MB int8) + tokenizer + nikud lexicon
+    "0773d00628f6e331a1e77c7251ce8b2793706f43eb57a9922cc4d66d57805347",
 };
 
 namespace {
