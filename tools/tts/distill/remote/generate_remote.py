@@ -85,6 +85,8 @@ def main():
     ap.add_argument("--ids-file", default=None, help="also generate these ids (one a line) from outside the range")
     ap.add_argument("--load-only", action="store_true", help="load the model and the inputs, then exit (setup check)")
     ap.add_argument("--out", default=OUT, help="output folder (several processes share one GPU, each with its own)")
+    ap.add_argument("--max-clips", type=int, default=0,
+                    help="stop after this many clips with exit code 3 (a process slows down over an hour; a fresh one is fast)")
     args = ap.parse_args()
     out_dir = args.out
     os.makedirs(out_dir, exist_ok=True)
@@ -164,6 +166,10 @@ def main():
                          "seconds": round(len(x) / 22050, 2), "ms": 0})
             if len(batch) >= args.zip_every:
                 flush_zip()
+            if args.max_clips and i >= args.max_clips and i < len(todo):
+                flush_zip()
+                print(f"stopping after {i} clips for a fresh start", flush=True)
+                sys.exit(3)
             if i % 50 == 0:
                 print(f"{i}/{len(todo)}  {seconds_total / 60:.1f} min of audio, {(time.time() - t0) / 60:.1f} min elapsed", flush=True)
     flush_zip()

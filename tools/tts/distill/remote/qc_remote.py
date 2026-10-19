@@ -59,16 +59,24 @@ def unpack(work):
     return clips
 
 
-def transcribe(work, clips, model_name, device):
-    """asr.jsonl: {"id", "hyp"} for every clip (resumes)."""
-    out_path = os.path.join(work, "asr.jsonl")
+def transcribe(work, clips, model_name, device, shard=None):
+    """asr.jsonl: {"id", "hyp"} for every clip (resumes). With shard (k, n) only
+    every n-th clip from the k-th, into asr.k.jsonl (one process a GPU); a run
+    without shard reads all of them."""
+    out_path = os.path.join(work, "asr.jsonl" if shard is None else f"asr.{shard[0]}.jsonl")
     done = {}
-    if os.path.exists(out_path):
-        with open(out_path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    row = json.loads(line)
-                    done[row["id"]] = row["hyp"]
+    for path in [os.path.join(work, "asr.jsonl")] + sorted(glob.glob(os.path.join(work, "asr.*.jsonl"))):
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:  # a line cut by a kill
+                            continue
+                        done[row["id"]] = row["hyp"]
+    if shard is not None:
+        clips = clips[shard[0]::shard[1]]
     todo = [c for c in clips if c["id"] not in done]
     if todo:
         from faster_whisper import WhisperModel
@@ -92,10 +100,19 @@ def main():
     ap.add_argument("--model", default="ivrit-ai/whisper-large-v3-turbo-ct2")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--max-cer", type=float, default=0.15)
+    ap.add_argument("--unpack-only", action="store_true", help="unpack the zips and stop (before --shard runs)")
+    ap.add_argument("--shard", default=None, help="k/n: transcribe only this share, then stop")
     args = ap.parse_args()
     work = args.work
+    if args.shard:  # the zips are unpacked already (--unpack-only)
+        clips = [json.loads(l) for l in open(os.path.join(work, "clips.jsonl"), encoding="utf-8") if l.strip()]
+        k, n = (int(x) for x in args.shard.split("/"))
+        transcribe(work, clips, args.model, args.device, (k, n))
+        return
     clips = unpack(work)
     print(len(clips), "clips", flush=True)
+    if args.unpack_only:
+        return
     hyps = transcribe(work, clips, args.model, args.device)
 
     passed, rejected = [], []

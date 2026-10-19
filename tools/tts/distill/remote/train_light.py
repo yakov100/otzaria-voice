@@ -8,7 +8,9 @@ of this run), then the ONNX export and the listening samples.
     python train_light.py --run pilot --export-only
 
 Output: /workspace/runs/<run>/{phonemes.json, chaim-light.json, ckpt/, chaim-light.onnx, samples/}.
-Bases: he_IL-saspeech (pilot only, non-commercial) or en_US-lessac (free).
+Bases: en_US-ljspeech (LJ Speech: public domain, trained from scratch) for anything published;
+he_IL-saspeech (non-commercial) and en_US-lessac (Blizzard 2013 data: research use only) only
+for experiments.
 """
 import argparse
 import csv
@@ -61,7 +63,8 @@ def symbol_table(data_dir, path):
 
 def base_checkpoint(base):
     from huggingface_hub import hf_hub_download, list_repo_files
-    folder = {"he_IL-saspeech": "he/he_IL/saspeech/medium", "en_US-lessac": "en/en_US/lessac/medium"}[base]
+    folder = {"he_IL-saspeech": "he/he_IL/saspeech/medium", "en_US-lessac": "en/en_US/lessac/medium",
+              "en_US-ljspeech": "en/en_US/ljspeech/medium"}[base]
     files = [f for f in list_repo_files("rhasspy/piper-checkpoints", repo_type="dataset")
              if f.startswith(folder + "/") and f.endswith(".ckpt")]
     return hf_hub_download("rhasspy/piper-checkpoints", files[0], repo_type="dataset", local_dir="/workspace/models")
@@ -105,7 +108,7 @@ def export_and_listen(out, data_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="pilot")
-    ap.add_argument("--base", default="he_IL-saspeech")
+    ap.add_argument("--base", default="en_US-ljspeech")
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--zip", default=None, help="dataset.zip or dataset-flac.zip (default: the one in /workspace/data)")
