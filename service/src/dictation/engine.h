@@ -263,6 +263,7 @@ class LiveTranscriber {
   std::vector<float> segment_;
   double speechSec_ = 0, silenceSec_ = 0;
   size_t sinceUpdate_ = 0;
+  bool draftDue_ = false;  // a draft turn came up during this add()
   int segmentId_ = 0;
   std::vector<std::string> committed_;
   std::vector<std::string> previous_;
