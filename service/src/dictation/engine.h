@@ -3,6 +3,7 @@
 // segment while the user speaks. A C++ port of lib/voice_input/engine in Otzaria.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <array>
@@ -216,6 +217,21 @@ struct LiveUpdate {
   bool isFinal;
 };
 
+// Where a segment sat in the stream and when its final decode ran, for the
+// service's log. Positions count samples from the transcriber's first one.
+struct SegmentTiming {
+  int segment = 0;
+  size_t speechStart = 0;     // the start of the frame that opened it
+  size_t speechEnd = 0;       // the end of its last speech frame
+  size_t end = 0;             // the end of the frame that closed it; 0 while open
+  size_t samples = 0;         // its length, preroll and closing silence included
+  const char* closedBy = "";  // "silence", "length" (the 15 s cut) or "stop"
+  bool hasText = false;       // long enough for a final decode
+  int drafts = 0;             // drafts decoded
+  int skipped = 0;            // draft turns folded into a later draft
+  std::chrono::steady_clock::time_point closing, decoded;  // the final decode's start and end
+};
+
 class LiveTranscriber {
  public:
   // [rescorer]: second pass at the end of each segment; null = none. The final
@@ -224,6 +240,8 @@ class LiveTranscriber {
                   std::vector<std::string> context, const PhraseRescorer* rescorer = nullptr);
   std::vector<LiveUpdate> add(const float* chunk, size_t n);
   std::vector<LiveUpdate> finish();
+  // One entry per segment so far, segment n at [n - 1].
+  const std::vector<SegmentTiming>& timings() const { return timings_; }
 
  private:
   void step(const float* part, size_t n, std::vector<LiveUpdate>& out);
@@ -249,6 +267,8 @@ class LiveTranscriber {
   std::vector<std::string> committed_;
   std::vector<std::string> previous_;
   bool hasPrevious_ = false;
+  size_t fed_ = 0;  // samples so far
+  std::vector<SegmentTiming> timings_;
 };
 
 }  // namespace voice

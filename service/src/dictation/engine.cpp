@@ -1124,11 +1124,16 @@ std::vector<LiveUpdate> LiveTranscriber::add(const float* chunk, size_t n) {
 
 std::vector<LiveUpdate> LiveTranscriber::finish() {
   std::vector<LiveUpdate> out;
-  if (inSpeech_) endSegment(out);
+  if (inSpeech_) {
+    timings_.back().closedBy = "stop";
+    endSegment(out);
+  }
   return out;
 }
 
 void LiveTranscriber::step(const float* part, size_t n, std::vector<LiveUpdate>& out) {
+  const size_t at = fed_;
+  fed_ += n;
   const double sec = double(n) / kRate;
   double sum = 0;
   for (size_t i = 0; i < n; i++) sum += double(part[i]) * part[i];
@@ -1147,6 +1152,11 @@ void LiveTranscriber::step(const float* part, size_t n, std::vector<LiveUpdate>&
     if (!speaking) return;
     inSpeech_ = true;
     segmentId_++;
+    SegmentTiming t;
+    t.segment = segmentId_;
+    t.speechStart = at;
+    t.speechEnd = fed_;
+    timings_.push_back(t);
     segment_.clear();
     for (const auto& p : preroll_) segment_.insert(segment_.end(), p.begin(), p.end());
     preroll_.clear();
@@ -1165,10 +1175,12 @@ void LiveTranscriber::step(const float* part, size_t n, std::vector<LiveUpdate>&
   if (speaking) {
     speechSec_ += sec;
     silenceSec_ = 0;
+    timings_.back().speechEnd = fed_;
   } else {
     silenceSec_ += sec;
   }
   if (silenceSec_ >= kSilenceToEnd || double(segment_.size()) / kRate >= kMaxSegment) {
+    timings_.back().closedBy = silenceSec_ >= kSilenceToEnd ? "silence" : "length";
     endSegment(out);
   } else if (double(sinceUpdate_) >= kUpdateEvery * kRate) {
     sinceUpdate_ = 0;
@@ -1196,6 +1208,7 @@ void LiveTranscriber::update(std::vector<LiveUpdate>& out) {
   }
   previous_ = hyp;
   hasPrevious_ = true;
+  timings_.back().drafts++;
   std::vector<std::string> shown = committed_;
   if (hyp.size() > committed_.size())
     shown.insert(shown.end(), hyp.begin() + committed_.size(), hyp.end());
@@ -1204,6 +1217,11 @@ void LiveTranscriber::update(std::vector<LiveUpdate>& out) {
 
 void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
   inSpeech_ = false;
+  SegmentTiming& t = timings_.back();
+  t.end = fed_;
+  t.samples = segment_.size();
+  t.hasText = speechSec_ >= kMinSpeechSec;
+  t.closing = std::chrono::steady_clock::now();
   if (speechSec_ >= kMinSpeechSec) {
     CtcOutput r;
     const auto finalWords = recognize(16, &r);
@@ -1227,6 +1245,7 @@ void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
     // Too short (a cough, a click) after a draft was shown: clear it.
     out.push_back({segmentId_, "", true});
   }
+  t.decoded = std::chrono::steady_clock::now();
   segment_.clear();
   segment_.shrink_to_fit();
   committed_.clear();

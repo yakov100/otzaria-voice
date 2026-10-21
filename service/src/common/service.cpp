@@ -838,12 +838,75 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
     }
     return ups;
   };
+  // Lag: each microphone chunk as the loop got it (samples so far, time), and
+  // when each segment's text went out.
+  std::vector<std::pair<size_t, Clock::time_point>> chunks;
+  auto got = [&](const std::vector<float>& pcm) {
+    chunks.emplace_back((chunks.empty() ? 0 : chunks.back().first) + pcm.size(), Clock::now());
+  };
+  int firstSegment = 0;
+  Clock::time_point firstSent{}, stopSeen{};
+  std::map<int, Clock::time_point> finalSent;
+  auto send = [&](const std::vector<voice::LiveUpdate>& ups) {
+    const auto now = Clock::now();
+    for (const auto& u : ups) {
+      if (!firstSegment && !u.text.empty()) {
+        firstSegment = u.segment;
+        firstSent = now;
+      }
+      if (u.isFinal) finalSent[u.segment] = now;
+    }
+    sink(ups);
+  };
   auto summary = [&](const std::string& why) {
+    // Stream positions as times. The microphone hands over audio when a chunk
+    // fills; the earliest any chunk reached the loop, against its place in the
+    // stream, sets the device's own delay. A position's chunk then "came in"
+    // at opened + delay + the chunk's end, and was spoken at opened + delay +
+    // the position (later than true by the device's buffering, tens of ms).
+    Clock::duration delay = Clock::duration::max();
+    const auto span = [](size_t samples) {
+      return std::chrono::duration_cast<Clock::duration>(
+          std::chrono::microseconds(int64_t(samples) * 1000000 / Microphone::kSampleRate));
+    };
+    for (const auto& [end, at] : chunks) delay = std::min(delay, at - (opened + span(end)));
+    const auto spoken = [&](size_t pos) { return opened + delay + span(pos); };
+    const auto cameIn = [&](size_t pos) {
+      auto c = std::lower_bound(chunks.begin(), chunks.end(), pos,
+                                [](const auto& ch, size_t p) { return ch.first < p; });
+      return spoken(c == chunks.end() ? pos : c->first);
+    };
+    const auto& timings = live.timings();
+    long firstSpeechMs = -1;
+    if (firstSegment && !chunks.empty())
+      firstSpeechMs = ms(spoken(timings[firstSegment - 1].speechStart), firstSent);
+    const double audioSec = chunks.empty() ? 0 : double(chunks.back().first) / Microphone::kSampleRate;
+    const auto ended = stopSeen == Clock::time_point{} ? Clock::now() : stopSeen;
+    char audio[64];
+    snprintf(audio, sizeof audio, "%.1f s of %.1f s", audioSec,
+             std::chrono::duration<double>(ended - opened).count());
     platform::log("dictation: load " + std::to_string(loadMs) + " ms, first text " +
-                  std::to_string(firstTextMs) + " ms, sentences " + std::to_string(finals) +
+                  std::to_string(firstTextMs) + " ms (" + std::to_string(firstSpeechMs) +
+                  " ms from speech), sentences " + std::to_string(finals) +
                   ", slowest decode " + std::to_string(decodeMax) + " ms, final pass max " +
                   std::to_string(finalMax) + " ms, decodes over 250 ms " +
-                  std::to_string(slowDecodes) + ", ended " + why);
+                  std::to_string(slowDecodes) + ", audio " + audio + ", ended " + why);
+    if (chunks.empty()) return;
+    // One line per segment that got text: its length, the lag when its last
+    // frame reached the engine, and the final text's time after speech ended.
+    for (const auto& t : timings) {
+      if (!t.end || !t.hasText) continue;
+      const auto sent = finalSent.find(t.segment);
+      char line[256];
+      snprintf(line, sizeof line,
+               "segment %d: %.1f s, closed by %s, lag at close %ld ms, final text %ld ms after "
+               "speech, final decode %ld ms, drafts %d (skipped %d)",
+               t.segment, double(t.samples) / Microphone::kSampleRate, t.closedBy,
+               ms(cameIn(t.end), t.closing),
+               sent == finalSent.end() ? -1L : ms(spoken(t.speechEnd), sent->second),
+               ms(t.closing, t.decoded), t.drafts, t.skipped);
+      platform::log(line);
+    }
   };
   auto take = [&](const std::vector<voice::LiveUpdate>& ups) {
     if (!ups.empty()) {
@@ -851,7 +914,7 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
       heard = true;
       sentenceDone = ups.back().isFinal;
     }
-    sink(ups);
+    send(ups);
   };
   std::string reason = "stopped";
   while (true) {
@@ -879,14 +942,17 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
     }
     mic.wait(50);
     mic.drain([&](const std::vector<float>& pcm) {
+      got(pcm);
       take(timed([&] { return live.add(pcm.data(), pcm.size()); }));
     });
   }
+  stopSeen = Clock::now();
   mic.stop();
   mic.drain([&](const std::vector<float>& pcm) {
-    sink(timed([&] { return live.add(pcm.data(), pcm.size()); }));
+    got(pcm);
+    send(timed([&] { return live.add(pcm.data(), pcm.size()); }));
   }, false);
-  sink(timed([&] { return live.finish(); }));
+  send(timed([&] { return live.finish(); }));
   summary(reason);
   return reason;
 }
