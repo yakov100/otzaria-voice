@@ -709,12 +709,29 @@ void requestQuit() {
 #endif
 }
 
+#ifdef _WIN32
+// Windows slows a windowless process it started itself ("efficiency mode"):
+// the service started at login or from Explorer decoded about ten times slower
+// than the same file started from a console, and dictation fell seconds behind.
+// It asks to run at full speed. Looked up at run time: Windows 8 and later.
+static bool runAtFullSpeed() {
+  struct Throttling {
+    ULONG version, controlMask, stateMask;
+  } never{1, 1, 0};  // execution speed: in the mask, never throttled
+  using Set = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
+  auto set = reinterpret_cast<Set>(
+      GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetProcessInformation"));
+  return set && set(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &never, sizeof never);
+}
+#endif
+
 int serve() {
 #ifdef _WIN32
   // One instance per port (a test instance may run beside the installed one).
   const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(port());
   HANDLE single = CreateMutexW(nullptr, TRUE, mutexName.c_str());
   if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+  if (!runAtFullSpeed()) platform::log("cannot turn efficiency mode off");
 #endif
   netStartup();
   quitting = false;
