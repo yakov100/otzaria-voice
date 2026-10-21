@@ -681,10 +681,17 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
     }
     if (!alive()) return "gone";
     mic.wait(50);
-    mic.drain([&](const std::vector<float>& pcm) { take(live.add(pcm.data(), pcm.size())); });
+    // All the audio waiting goes in at once, so the transcriber drafts once on
+    // the latest of it, and stop and cancel are checked between turns.
+    std::vector<float> pcm;
+    mic.drain([&](const std::vector<float>& c) { pcm.insert(pcm.end(), c.begin(), c.end()); });
+    if (!pcm.empty()) take(live.add(pcm.data(), pcm.size()));
   }
   mic.stop();
-  mic.drain([&](const std::vector<float>& pcm) { sink(live.add(pcm.data(), pcm.size())); }, false);
+  std::vector<float> rest;
+  mic.drain([&](const std::vector<float>& c) { rest.insert(rest.end(), c.begin(), c.end()); },
+            false);
+  if (!rest.empty()) sink(live.add(rest.data(), rest.size()));
   sink(live.finish());
   return reason;
 }

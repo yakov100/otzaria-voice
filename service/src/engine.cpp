@@ -1118,7 +1118,12 @@ LiveTranscriber::LiveTranscriber(CtcModel& model, const CtcDecoder& decoder,
 std::vector<LiveUpdate> LiveTranscriber::add(const float* chunk, size_t n) {
   std::vector<LiveUpdate> out;
   constexpr size_t frame = 320;  // 20ms
+  draftDue_ = false;
   for (size_t o = 0; o < n; o += frame) step(chunk + o, std::min(frame, n - o), out);
+  // However much audio piled up while decoding fell behind, one draft on where
+  // the segment is now: each draft decodes the whole segment, so one per 0.25 s
+  // of backlog only grows the backlog.
+  if (draftDue_ && inSpeech_) update(out);
   return out;
 }
 
@@ -1172,7 +1177,7 @@ void LiveTranscriber::step(const float* part, size_t n, std::vector<LiveUpdate>&
     endSegment(out);
   } else if (double(sinceUpdate_) >= kUpdateEvery * kRate) {
     sinceUpdate_ = 0;
-    update(out);
+    draftDue_ = true;  // add() drafts once, at the end
   }
 }
 
@@ -1204,6 +1209,7 @@ void LiveTranscriber::update(std::vector<LiveUpdate>& out) {
 
 void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
   inSpeech_ = false;
+  draftDue_ = false;  // the final decode replaces it
   if (speechSec_ >= kMinSpeechSec) {
     CtcOutput r;
     const auto finalWords = recognize(16, &r);
