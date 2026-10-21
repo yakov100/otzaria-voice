@@ -687,8 +687,10 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
     decodeMax = std::max(decodeMax, d);
     if (d > 250) slowDecodes++;  // longer than the draft interval: the mic backs up
     if (!ups.empty() && firstTextMs < 0) firstTextMs = ms(started, Clock::now());
-    if (!ups.empty() && ups.back().isFinal) {
-      finals++;
+    // A turn may close a segment and then draft the next one.
+    const auto f = std::count_if(ups.begin(), ups.end(), [](const auto& u) { return u.isFinal; });
+    if (f) {
+      finals += int(f);
       finalMax = std::max(finalMax, d);
     }
     return ups;
@@ -796,17 +798,23 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
       return "gone";
     }
     mic.wait(50);
-    mic.drain([&](const std::vector<float>& pcm) {
-      got(pcm);
-      take(timed([&] { return live.add(pcm.data(), pcm.size()); }));
+    // All the audio waiting goes in at once, so the transcriber drafts once on
+    // the latest of it, and stop and cancel are checked between turns.
+    std::vector<float> pcm;
+    mic.drain([&](const std::vector<float>& c) {
+      got(c);
+      pcm.insert(pcm.end(), c.begin(), c.end());
     });
+    if (!pcm.empty()) take(timed([&] { return live.add(pcm.data(), pcm.size()); }));
   }
   stopSeen = Clock::now();
   mic.stop();
-  mic.drain([&](const std::vector<float>& pcm) {
-    got(pcm);
-    send(timed([&] { return live.add(pcm.data(), pcm.size()); }));
+  std::vector<float> rest;
+  mic.drain([&](const std::vector<float>& c) {
+    got(c);
+    rest.insert(rest.end(), c.begin(), c.end());
   }, false);
+  if (!rest.empty()) send(timed([&] { return live.add(rest.data(), rest.size()); }));
   send(timed([&] { return live.finish(); }));
   summary(reason);
   return reason;
