@@ -65,17 +65,6 @@ function voiceLabel(voice) {
   return (RECORDED_NAMES[voice] || voice) + ' (קול מוקלט)';
 }
 
-/**
- * The menu title of a voice: 'קול: חיים קל (מהיר)', 'קול לשמירה: חיים (מוקלט)'.
- * The system and light voices read aloud and save; a recorded voice is too
- * slow to read live, so it only saves and reading stays in the system voice.
- */
-function voiceMenuTitle(voice) {
-  if (!voice) return 'קול: אסף (של Windows)';
-  if (isLightVoice(voice)) return 'קול: ' + (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
-  return 'קול לשמירה: ' + (RECORDED_NAMES[voice] || voice) + ' (מוקלט)';
-}
-
 /** A voice id the menu can show: a file name, short, without control characters. */
 function isUsableVoiceId(voice) {
   return typeof voice === 'string' && /^[^\u0000-\u001F\u007F]{1,60}$/.test(voice) && voice !== 'system';
@@ -96,27 +85,87 @@ function menuVoices(installed, installedLight) {
   return out;
 }
 
-/** The children of the toolbar menu, with one item per voice in [voices]. */
-function menuChildren(voices) {
-  const before = [
-    { id: 'play', title: 'הקרא / השהה', icon: 'play_24_regular' },
-    { id: 'stop', title: 'עצור והתחל מחדש', icon: 'stop_24_regular' },
+/**
+ * The toolbar is two short menus instead of one long list (Otzaria allows two
+ * toolbar items per plugin): the reading button (play, stop and the speed) and
+ * the voice button (the voices, then saving as MP3 and removing voices). A menu
+ * has no check state, so the speed and the voice in use are shown with a filled
+ * dot and the others with an empty circle, and the voice button carries the
+ * voice in use in its title. The menus are rebuilt whenever the choice changes.
+ * The manifest declares them for the defaults (see toolbarItems).
+ */
+const VOICE_ID = 'tts-voice';
+const MARK_ON = '● ';
+const MARK_OFF = '○ ';
+let neutralMenu = false;  // true while building the manifest's menus: no choice is marked (see toolbarItems)
+function choice(id, title, selected) {
+  return { id, title: neutralMenu ? title : (selected ? MARK_ON : MARK_OFF) + title };
+}
+
+/** The voice's name as the menu lists it. */
+function voiceItemTitle(voice) {
+  if (!voice) return 'אסף (של Windows)';
+  if (isLightVoice(voice)) return (LIGHT_NAMES[voice] || voice) + ' (מהיר)';
+  return (RECORDED_NAMES[voice] || voice) + ' (מוקלט, לשמירה בלבד)';
+}
+
+/** The voice's short name, for the voice button. */
+function voiceShortName(voice) {
+  if (!voice) return 'אסף';
+  return isLightVoice(voice) ? (LIGHT_NAMES[voice] || voice) : (RECORDED_NAMES[voice] || voice);
+}
+
+/** The children of each menu, with one voice item per voice in [voices]; the speed and voice in use come from [state]. */
+function menuGroups(voices) {
+  const save = [
     { id: 'save-chapter', title: 'שמור את הפרק כ-MP3', icon: 'fluent:arrow_download_24_regular' },
     { id: 'choose-folder', title: 'בחר תיקייה לשמירת MP3', icon: 'fluent:folder_open_24_regular' },
     { id: 'cancel-export', title: 'בטל את שמירת ה-MP3', icon: 'fluent:dismiss_circle_24_regular' },
-    { id: 'rate-slow', title: 'מהירות: איטית' },
-    { id: 'rate-normal', title: 'מהירות: רגילה' },
-    { id: 'rate-fast', title: 'מהירות: מהירה' },
-    { id: 'rate-faster', title: 'מהירות: מהירה מאוד' },
-    { id: SYSTEM_VOICE_ITEM, title: voiceMenuTitle('') }
-  ];
-  const after = [
     { id: 'remove-voice-model', title: 'הסר את הקול המוקלט מהמחשב', icon: 'fluent:delete_24_regular' },
     { id: 'remove-light-model', title: 'הסר את הקול הקל מהמחשב', icon: 'fluent:delete_24_regular' }
   ];
-  const room = MAX_MENU_CHILDREN - before.length - after.length;
-  const items = voices.slice(0, room).map(v => ({ id: voiceItemId(v), title: voiceMenuTitle(v) }));
-  return before.concat(items, after);
+  const main = [
+    { id: 'play', title: 'הקרא / השהה', icon: 'play_24_regular' },
+    { id: 'stop', title: 'עצור והתחל מחדש', icon: 'stop_24_regular' }
+  ].concat(Object.keys(RATES).map(id => choice(id, 'מהירות: ' + RATE_LABELS[id], RATES[id] === state.rate)));
+  const room = MAX_MENU_CHILDREN - save.length - 1;  // one more place is the system voice
+  const shown = voices.slice(0, room);
+  // The voice in use is always offered and marked, even when the service does not list it (service off, file gone, past the limit).
+  if (state.mp3Voice && isUsableVoiceId(state.mp3Voice) && !shown.includes(state.mp3Voice)) {
+    if (shown.length >= room) shown.pop();
+    shown.push(state.mp3Voice);
+  }
+  const voice = [choice(SYSTEM_VOICE_ITEM, voiceItemTitle(''), !state.mp3Voice)].concat(
+    shown.map(v => choice(voiceItemId(v), voiceItemTitle(v), v === state.mp3Voice)), save);
+  return { main, voice };
+}
+
+/** The title of the voice button (a tooltip on the toolbar): the voice in use; a recorded voice only saves, reading stays in the system voice. */
+function voiceButtonTitle() {
+  if (neutralMenu) return 'קול ושמירה כ-MP3';
+  const v = state.mp3Voice;
+  return v && !isLightVoice(v) ? 'קול לשמירה: ' + voiceShortName(v) + ' (הקראה: אסף)' : 'קול: ' + voiceShortName(v);
+}
+
+/**
+ * The two toolbar items. The manifest declares them [neutral]: nothing marked,
+ * because Otzaria reloads the manifest's items when the plugin's engine has
+ * been shut down for a few minutes (and at start), and a mark that is no
+ * longer true is worse than none. The marks come back with the engine's next
+ * start (plugin.boot).
+ */
+function toolbarItems(voices, neutral) {
+  neutralMenu = !!neutral;
+  try {
+    const g = menuGroups(voices);
+    const contexts = ['reader-text'];
+    return [
+      { id: TOOLBAR_ID, type: 'split', title: 'הקראה קולית', icon: 'speaker_2_24_regular', contexts, children: g.main },
+      { id: VOICE_ID, type: 'menu', title: voiceButtonTitle(), icon: 'fluent:person_24_regular', contexts, children: g.voice }
+    ];
+  } finally {
+    neutralMenu = false;
+  }
 }
 
 const state = {
@@ -306,16 +355,30 @@ const ABBREVIATIONS = {
   "מס'": 'מסכת', "במס'": 'במסכת', "ה'": 'השם', "מ'": 'משנה', "תוס'": 'תוספות', "ותוס'": 'ותוספות', "שנא'": 'שנאמר',
   "גמ'": 'גמרא', "בגמ'": 'בגמרא', "מתני'": 'מתניתין', "במתני'": 'במתניתין', "ממתני'": 'ממתניתין', "ברייתא'": 'ברייתא',
   "וגו'": 'וגומר', "כו'": 'כולי', "הל'": 'הלכות', "ע'": 'עמוד', "הג'": 'הגאון', "הגר'": 'הגאון רבי', "דר'": 'דרבי',
-  "ור'": 'ורבי', "לר'": 'לרבי', "כר'": 'כרבי', "אמ'": 'אמר', "ואמ'": 'ואמר', "פס'": 'פסוק', "מהר'": 'מהרב'
+  "ור'": 'ורבי', "לר'": 'לרבי', "כר'": 'כרבי', "אמ'": 'אמר', "ואמ'": 'ואמר', "פס'": 'פסוק', "מהר'": 'מהרב',
+  // added: frequent forms the library scan found read letter by letter or with the geresh dropped
+  'אח"כ': 'אחר כך', 'אחה"צ': 'אחר הצהריים', 'ס"ל': 'סבירא ליה', 'חז"ל': 'חכמינו זכרונם לברכה',
+  'רז"ל': 'רבותינו זכרונם לברכה', 'וז"ש': 'וזהו שאמר', 'מה"ת': 'מן התורה', 'אעפ"י': 'אף על פי',
+  'לפי"ז': 'לפי זה', 'מש"ה': 'משום הכי', 'עכ"ז': 'עם כל זה', 'עכ"ד': 'עד כאן דבריו', 'א"צ': 'אין צריך',
+  'הו"ל': 'הוה ליה', 'קי"ל': 'קיימא לן', 'קיי"ל': 'קיימא לן', 'השי"ת': 'השם יתברך', 'הש"י': 'השם יתברך',
+  'ית"ש': 'יתברך שמו', 'בנ"ד': 'בנידון דידן', 'פ"ק': 'פרק קמא', 'רה"ר': 'רשות הרבים', 'רה"י': 'רשות היחיד',
+  'הג"ה': 'הגהה', 'יע"ש': 'יעיין שם', 'יעו"ש': 'יעויין שם', 'עי"ז': 'על ידי זה', 'לא"ה': 'לאו הכי',
+  'יצ"ו': 'ישמרהו צורו ויחיהו', 'ח"מ': 'חושן משפט', 'תוה"ק': 'תורה הקדושה', 'הס"א': 'הסטרא אחרא',
+  "הי'": 'היה', "יהי'": 'יהיה', "תהי'": 'תהיה', "לי'": 'ליה', "בי'": 'ביה', "עלי'": 'עליה', "מיני'": 'מיניה',
+  "לדידי'": 'לדידיה', "ראי'": 'ראיה', "קושי'": 'קושיא', "אפי'": 'אפילו', "אמרי'": 'אמרינן', "בעי'": 'בעינן',
+  "בחי'": 'בחידושי', "בבחי'": 'בבחינת', "ית'": 'יתברך', "תי'": 'תירץ', "קו'": 'קושיית', "הק'": 'הקדוש',
+  "הנז'": 'הנזכר', "ישעי'": 'ישעיה', "ירמי'": 'ירמיה', "סעי'": 'סעיף', "שכ'": 'שכתב', "תו'": 'תוספות',
+  'עי"ש': 'עיין שם', 'פירש"י': 'פירש רשי', 'פרש"י': 'פירש רשי', 'זש"ה': 'זה שאמר הכתוב', 'זא"ז': 'זה את זה',
+  'לק"מ': 'לא קשה מידי', 'במק"א': 'במקום אחר', 'יצה"ר': 'יצר הרע', 'רשוה"י': 'רשות היחיד', 'רשוה"ר': 'רשות הרבים',
+  'הוי"ה': 'השם', 'אע"ה': 'אברהם אבינו עליו השלום', "או'": 'אומר', "תשו'": 'תשובה', "תשוב'": 'תשובה', "עיי'": 'עיין'
 };
 
-/** [plain] in [table] as is, or with one prefix letter (בתוס', הרמב"ם) before it. */
-function lookup(table, plain) {
+/** [plain] in [table] as is, or with up to two prefix letters (בתוס', הרמב"ם, והרא"ש, דס"ל) before it. */
+function lookup(table, plain, depth = 0) {
   const direct = table instanceof Set ? (table.has(plain) ? plain.replace(/["']/g, '') : null) : table[plain];
   if (direct) return direct;
-  if (plain.length > 2 && 'ובלכמשהד'.includes(plain[0])) {
-    const rest = plain.slice(1);
-    const found = table instanceof Set ? (table.has(rest) ? rest.replace(/["']/g, '') : null) : table[rest];
+  if (depth < 2 && plain.length > 2 && 'ובלכמשהד'.includes(plain[0])) {
+    const found = lookup(table, plain.slice(1), depth + 1);
     if (found) return plain[0] + found;
   }
   return null;
@@ -324,7 +387,8 @@ function lookup(table, plain) {
 /** Names said as one word: only the quote marks are dropped. */
 const NAMES = new Set(('רש"י רמב"ם רמב"ן רשב"א ריטב"א ר"ן רא"ש רי"ף ראב"ד רשב"ם רד"ק רלב"ג מהרש"א מהרש"ל מהר"ל מהרי"ל ' +
   'מהר"ם מהרי"ק מהרשד"ם רמ"א ש"ך ט"ז סמ"ע סמ"ג סמ"ק רא"ה רע"ב רשב"ץ ריב"ש רי"ד ראבי"ה אבודרה"ם שד"ל ' +
-  'מלבי"ם חת"ס רעק"א נתיה"מ קצוה"ח רש"ש רי"ו ב"ח ט"ז שליט"א זצ"ל').split(' '));
+  'מלבי"ם חת"ס רעק"א נתיה"מ קצוה"ח רש"ש רי"ו ב"ח ט"ז שליט"א זצ"ל ' +
+  'ריא"ז בעש"ט מהריב"ל מוהריב"ל עכו"ם').split(' '));
 
 /** The letters by name (vocalized: unvocalized וו, הא, פא are misread). */
 const LETTER_NAMES = {
@@ -350,6 +414,59 @@ function isNumeral(word, afterHead) {
   return word.length >= 1 && word.length <= 3 && GEMATRIA.test(word) && (afterHead || !NOT_NUMERALS.has(word));
 }
 
+
+/** A numeral head (דף, פרק, סימן ...), also with one prefix letter: בפרק, מפרק, בדף, לסימן. */
+function isHead(word) {
+  return NUMERAL_HEADS.test(word) || (word.length >= 3 && 'ובלמכשה'.includes(word[0]) && NUMERAL_HEADS.test(word.slice(1)));
+}
+
+// Quantity numerals: "ג' ימים" is "שלשה ימים", not the letter name. Only when the next word is a counted noun
+// (so "ה' אלקינו" stays "השם"); the gender comes from the noun. Prefixes: בד' אמות -> בארבע אמות.
+const COUNTED_M = new Set('ימים חדשים אנשים אחים עדים דינרים סלעים דברים פרקים ספרים צדדים מקומות מינים דינים כלים בתים יום חדש איש דינר'.split(' '));
+const COUNTED_F = new Set('רוחות רשויות אמות פעמים שנים מיתות מצוות ברכות נשים מידות שעות תיבות מילים אותיות כוסות ארצות פרשיות עבירות בנות שנה אמה שעה מצוה פעם'.split(' '));
+const NUM_VALUE = { 'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8, 'ט': 9, 'י': 10, 'כ': 20, 'ל': 30, 'מ': 40, 'נ': 50, 'ס': 60, 'ע': 70, 'פ': 80, 'צ': 90 };
+const ONES_M = ['', 'אחד', 'שני', 'שלשה', 'ארבעה', 'חמשה', 'ששה', 'שבעה', 'שמונה', 'תשעה'];
+const ONES_F = ['', 'אחת', 'שתי', 'שלש', 'ארבע', 'חמש', 'שש', 'שבע', 'שמונה', 'תשע'];
+const ABS_M = ['', 'אחד', 'שנים', 'שלשה', 'ארבעה', 'חמשה', 'ששה', 'שבעה', 'שמונה', 'תשעה'];
+const ABS_F = ['', 'אחת', 'שתים', 'שלש', 'ארבע', 'חמש', 'שש', 'שבע', 'שמונה', 'תשע'];
+const TENS = { 20: 'עשרים', 30: 'שלשים', 40: 'ארבעים', 50: 'חמשים', 60: 'ששים', 70: 'שבעים', 80: 'שמונים', 90: 'תשעים' };
+const WEEKDAYS = { 'א': 'ראשון', 'ב': 'שני', 'ג': 'שלישי', 'ד': 'רביעי', 'ה': 'חמישי', 'ו': 'ששי' };
+
+/** Value 2..99 of one or two gematria letters (tens then units), or null. */
+function smallValue(letters) {
+  if (letters.length === 1) return NUM_VALUE[letters] >= 2 ? NUM_VALUE[letters] : null;
+  if (letters.length === 2 && NUM_VALUE[letters[0]] >= 10 && NUM_VALUE[letters[1]] <= 9) return NUM_VALUE[letters[0]] + NUM_VALUE[letters[1]];
+  return null;
+}
+
+function numberWords(n, fem, singularNoun) {
+  if (n < 10) return singularNoun ? null : (fem ? ONES_F : ONES_M)[n];
+  if (n === 10) return fem ? 'עשר' : 'עשרה';
+  if (n < 20) return (n === 12 ? (fem ? 'שתים' : 'שנים') : (fem ? ABS_F : ABS_M)[n - 10]) + ' ' + (fem ? 'עשרה' : 'עשר');
+  const tens = n - (n % 10);
+  return n % 10 === 0 ? TENS[tens] : TENS[tens] + ' ו' + (fem ? ABS_F : ABS_M)[n % 10];
+}
+
+/** The spoken form of a quantity numeral token, or null when it is not one. */
+function quantityNumeral(plain, prev, orig, end) {
+  const m = /^([ובלכמש]{0,2})((?:[א-ת]')|(?:[א-ת]{1,2}"[א-ת]))$/.exec(plain);
+  if (!m) return null;
+  const prefix = m[1];
+  const letters = m[2].replace(/["']/g, '');
+  const value = smallValue(letters);
+  if (value === null) return null;
+  // weekdays: יום ב' -> יום שני
+  if (prefix === '' && /^[ובלמכ]?(יום|ליל)$/.test(prev) && letters.length === 1 && WEEKDAYS[letters] && /'$/.test(m[2])) return WEEKDAYS[letters];
+  if (isHead(prev) && prev.replace(/^[ובלמכשה]/, '') !== 'פרק' && prev !== 'פרק') return null;
+  const nm = /^\s+([א-ת][֑-ׇ]*(?:[א-ת][֑-ׇ]*)*)/.exec(orig.slice(end, end + 30));
+  if (!nm) return null;
+  const noun = nm[1].replace(/[֑-ׇ]/g, '');
+  const fem = COUNTED_F.has(noun);
+  if (!fem && !COUNTED_M.has(noun)) return null;
+  const words = numberWords(value, fem, noun.length > 0 && !/(ים|ות)$/.test(noun) && value < 11);
+  return words === null ? null : prefix + words;
+}
+
 /**
  * The words of [orig] that are said differently: abbreviations, names with
  * quote marks, and numerals (letters as numbers, said by letter name:
@@ -365,8 +482,12 @@ function rewrites(orig) {
     const raw = m[0];
     const plain = raw.replace(/[֑-ׇ]/g, '').replace(/[״]/g, '"').replace(/[׳]/g, "'");
     const letters = plain.replace(/["']/g, '');
-    const afterHead = NUMERAL_HEADS.test(prev);
+    const afterHead = isHead(prev);
     let text = null;
+    if (/["']/.test(plain)) {
+      const quantity = quantityNumeral(plain, prev, orig, m.index + raw.length);
+      if (quantity !== null) { out.set(m.index, { length: raw.length, text: quantity }); prev = plain; continue; }
+    }
     if (/["']/.test(plain)) {
       const expansion = lookup(ABBREVIATIONS, plain);
       const name = expansion ? null : lookup(NAMES, plain);
@@ -1037,32 +1158,53 @@ async function resumeLive() {
   return true;
 }
 
+// What the menus show now: the voices plus the speed and the voice in use. Null at
+// start: the manifest's menus carry no marks, so the first refresh always sends them.
+let shownVoices = null;
+let lastVoices = menuVoices(undefined, undefined);
+
+/** Shows the menu for [voices] with the current speed and voice marked; nothing is sent when it already looks so. */
+async function applyMenu(voices) {
+  const key = voices.join(',') + '|' + state.rate + '|' + state.mp3Voice;
+  if (key === shownVoices) return true;
+  const g = menuGroups(voices);
+  const results = await Promise.all([
+    call('reader.updateToolbarItem', { id: TOOLBAR_ID, patch: { children: g.main } }),
+    call('reader.updateToolbarItem', { id: VOICE_ID, patch: { children: g.voice, title: voiceButtonTitle() } })
+  ]);
+  const ok = results.every(r => r.success);
+  if (ok) shownVoices = key;
+  return ok;
+}
+
+/** Marks the speed and the voice in use at once, from the voices known so far (the service may be slow to answer). */
+function markChoice() {
+  return applyMenu(lastVoices);
+}
+
 /**
  * Rebuilds the toolbar menu so that it offers every voice the service has
- * installed (a file dropped into the voices folder included). [status] is
- * the service's /status answer, fetched here when not given. Without the
- * service the menu is left as it is. Best effort: never throws.
+ * installed (a file dropped into the voices folder included) and marks the
+ * speed and the voice in use. [status] is the service's /status answer,
+ * fetched here when not given. Without the service the voices stay as last
+ * known (the declared ones at first). Best effort: never throws.
  */
-let shownVoices = null;
 async function refreshVoiceMenu(status) {
   let st = status;
   if (!st) {
     try {
       st = await serviceStatus();
     } catch (_) {
-      return false;
+      st = null;  // without the service the voices stay as known, but the choice is still shown
     }
   }
-  const voices = menuVoices(st && st.voices, st && st.lightVoices);
-  const key = voices.join('\n');
-  if (key === shownVoices) return true;
-  const res = await call('reader.updateToolbarItem', { id: TOOLBAR_ID, patch: { children: menuChildren(voices) } });
-  if (res.success) shownVoices = key;
-  return res.success;
+  if (st) lastVoices = menuVoices(st.voices, st.lightVoices);
+  return applyMenu(lastVoices);
 }
 
 async function setVoice(voice) {
   state.mp3Voice = voice;
+  markChoice();  // mark the chosen voice at once
   await call('storage.set', { key: 'mp3Voice', value: state.mp3Voice });
   message(voice && !isLightVoice(voice)
     ? 'הקול לשמירה כ-MP3: ' + voiceLabel(voice) + '. ההקראה בקול נשארת בקול של Windows.'
@@ -1072,6 +1214,7 @@ async function setVoice(voice) {
     st = await serviceStatus();
   } catch (_) {
     // A recorded voice needs the service; the system voice needs it only when saving.
+    markChoice();  // mark the chosen voice at once
     if (voice) await offerServiceInstall();
     return;
   }
@@ -1283,6 +1426,8 @@ async function setRate(id) {
   state.rate = RATES[id];
   await call('storage.set', { key: 'rate', value: state.rate });
   message('מהירות ההקראה: ' + RATE_LABELS[id]);
+  markChoice();  // mark the chosen speed at once
+  refreshVoiceMenu();
   // Apply immediately: restart from the current word.
   if (state.playing && state.bookId) {
     const w = state.words[state.wordPos];
@@ -1672,7 +1817,7 @@ Otzaria.on('plugin.boot', payload => {
   state.highlightColor = themeHighlight(payload && payload.theme);
   settingsReady = loadSettings();
   settingsReady.then(resumePendingExport);
-  refreshVoiceMenu();  // offer every installed voice, not only the manifest's
+  settingsReady.then(() => refreshVoiceMenu());  // offer every installed voice and mark the speed and voice in use
 });
 
 Otzaria.on('theme.changed', theme => {
