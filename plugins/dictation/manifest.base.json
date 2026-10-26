@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "id": "org.otzaria.voice-search",
   "name": "חיפוש בדיבור",
-  "version": "2.2.3",
+  "version": "2.3.0",
   "description": "כפתור מיקרופון לחיפוש: מדברים, והטקסט נכתב בשדה החיפוש. הזיהוי נעשה במחשב, בלי אינטרנט. האינטרנט משמש רק להורדת שירות הדיבור וחבילת הקול.",
   "author": "yakov100",
   "homepage": "https://github.com/yakov100/otzaria-voice",
   "entrypoint": "main.js",
   "headless": true,
   "icon": "icon/icon.png",
-  "minAppVersion": "0.9.98",
+  "minAppVersion": "0.9.98.1",
   "sdkVersion": "1.x",
   "stability": "beta",
   "permissions": [
@@ -20,7 +20,8 @@
     "network.localhost",
     "network.access",
     "reader.open",
-    "app.open_url"
+    "app.open_url",
+    "search.field_actions"
   ],
   "network": {
     "enabled": true,
@@ -46,6 +47,20 @@
           "label": "חיפוש בדיבור (מיקרופון)",
           "key": "ctrl+alt+v",
           "command": "dictate"
+        }
+      ],
+      "searchFieldActions": [
+        {
+          "id": "dictate",
+          "title": "חיפוש בדיבור",
+          "icon": "mic_24_regular",
+          "activeIcon": "mic_24_filled",
+          "fields": [
+            "fullText",
+            "library",
+            "inBook",
+            "findRef"
+          ]
         }
       ]
     }

@@ -7,14 +7,15 @@ Shared by two parallel pieces of work:
   supports it and falls back gracefully when it does not.
 
 Names below are what the Otzaria PR implements (branch
-`feat/plugin-search-field-actions`, min version **0.9.99**). Sections marked
+`feat/plugin-search-field-actions`, merged into `dev` as Otzaria/otzaria#2320;
+Otzaria marks these APIs as **0.9.98.1**, the next release after 0.9.98). Sections marked
 "Implemented as" record where the Otzaria side refined the original proposal.
 
 ## Manifest
 
 ```json
 {
-  "minAppVersion": "0.9.99",
+  "minAppVersion": "0.9.98.1",
   "permissions": ["app.startup_contributions", "search.field_actions", "app.run_on_startup"],
   "contributes": {
     "startup": {
@@ -35,7 +36,7 @@ Names below are what the Otzaria PR implements (branch
 - Declarative, like `toolbarItems`: Otzaria draws the button from the manifest
   without starting the plugin. Up to 2 actions per plugin.
 - `fields`: which search fields show it. Unknown values are ignored (the
-  packager warns); omitted = all supported fields. Supported in 0.9.99:
+  packager warns); omitted = all supported fields. Supported in 0.9.98.1:
   - `fullText` — the full-text library search field (search dialog / tab);
   - `library` — "find a book or author" in the library browser;
   - `inBook` — search inside an open book (text and PDF);
@@ -130,7 +131,9 @@ Plugin side (as built): runtime detection alone is not enough, because one
 package cannot serve both hosts — 0.9.98 rejects the unknown permission
 `search.field_actions` at install, and the packager rejects calls to
 `search.setFieldText` & co. under `minAppVersion` 0.9.98. So `plugins/dictation/build.py`
-produces two packages from one source: `released` (0.9.98, toolbar button +
-shortcut, no field-action code) and `next` (0.9.99, adds the permission, the
-`searchFieldActions` item with `fields: fullText, library, inBook, findRef`, and
-the handlers). The next package keeps the toolbar button and shortcut too.
+produced two packages from one source until plugin 2.2.3: `released` (0.9.98,
+toolbar button + shortcut, no field-action code) and `next` (0.9.98.1, adds the
+permission, the `searchFieldActions` item with `fields: fullText, library,
+inBook, findRef`, and the handlers). From plugin 2.3.0 the field action is in
+the released package itself (`minAppVersion` 0.9.98.1, set in
+`plugins/dictation/manifest.base.json`); users of Otzaria 0.9.98 keep 2.2.3.

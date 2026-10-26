@@ -10,13 +10,14 @@ const assert = require('assert');
 
 const root = path.join(__dirname, '..');
 const repo = path.join(root, '..', '..');
-const RELEASED = ['service.js', 'feedback.js', 'dictation.js', 'toolbar.js', 'main.js'];  // build.py, VARIANTS.released
+const RELEASED = ['service.js', 'feedback.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
 const bundle = '(function () {\n\'use strict\';\n' +
   RELEASED.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
 
 const INSTALLER = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
 const PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
 const SAVED = 'C:\\Users\\u\\Downloads\\otzaria-voice-windows-x64-without-models.exe';
+const FIELD_EVENT = 'search.fieldAction.invoked';  // field_actions.js
 
 /** [status]: the service's /status answer, or null when it does not answer. [download]: network.download's answer. */
 function load({ status, download }) {
@@ -108,6 +109,18 @@ async function test(name, fn) {
     assert.ok(told.some(c => c.title === 'תוכנת ההתקנה ירדה' && c.content.includes(SAVED) && c.content.includes('הפעל בכל זאת')), JSON.stringify(told));
   });
 
+  await test('Windows, no service, the microphone inside a search field: the same download', async () => {
+    const h = load({ status: null, download: { success: true, data: { path: SAVED } } });
+    h.handlers['plugin.boot']({ app: { platform: 'windows' } });
+    await settle();
+    await h.handlers[FIELD_EVENT]({ actionId: 'dictate', sessionId: 's1', text: '', selectionStart: 0 });
+    await settle();
+    const dl = of(h.calls, 'network.download');
+    assert.strictEqual(dl.length, 1, 'network.download calls: ' + dl.length);
+    assert.strictEqual(dl[0].payload.url, INSTALLER);
+    assert.ok(of(h.calls, 'search.endFieldSession').length >= 1, 'the field session was not ended');
+  });
+
   await test('Windows, the download fails: the download page opens instead', async () => {
     const calls = await press('windows', { status: null, download: { success: false, error: { code: 'error.forbidden' } } });
     assert.strictEqual(of(calls, 'network.download').length, 1);
@@ -139,6 +152,9 @@ async function test(name, fn) {
     const m = JSON.parse(fs.readFileSync(path.join(root, 'manifest.base.json'), 'utf8'));
     assert.ok(m.permissions.includes('network.access'), 'network.access is missing');
     assert.ok(m.permissions.includes('network.localhost'), 'network.localhost is missing');
+    assert.strictEqual(m.minAppVersion, '0.9.98.1', 'minAppVersion');
+    assert.ok(m.permissions.includes('search.field_actions'), 'search.field_actions is missing');
+    assert.strictEqual(m.contributes.startup.searchFieldActions[0].id, 'dictate');
     for (const hop of HOPS) {
       assert.ok(allowedBy(hop, m.network.allowlist), 'not in the manifest: ' + hop);
       assert.ok(allowedBy(hop, OFFICIAL), 'not in the official list: ' + hop);
