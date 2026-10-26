@@ -64,7 +64,7 @@ async function test(name, fn) {
 }
 
 (async () => {
-  await test('the manifest declares the two toolbar menus as built for the light and the pack voice alone', () => {
+  await test('the manifest declares the two toolbar menus as built for the pack voice alone', () => {
     const { ctx } = load(null);
     same(ctx.toolbarItems(ctx.menuVoices(undefined, undefined), true), manifest.contributes.startup.toolbarItems);
     assert.ok(!JSON.stringify(manifest.contributes.startup.toolbarItems).includes('●'), 'the manifest must not mark any choice');
@@ -80,11 +80,42 @@ async function test(name, fn) {
     same(ctx.menuVoices(['chaim'], ['chaim-light', 'moshe-light']), ['chaim-light', 'chaim', 'moshe-light']);
   });
 
-  await test('menuVoices: light voice, pack voice, installed ids after, bad ids dropped', () => {
+  await test('menuVoices: pack voice, installed ids after, bad ids dropped', () => {
     const { ctx } = load(null);
-    same(ctx.menuVoices(['test24', 'chaim', 'moshe']), ['chaim-light', 'chaim', 'test24', 'moshe']);
-    same(ctx.menuVoices(undefined), ['chaim-light', 'chaim']);
-    same(ctx.menuVoices(['', 'a\u0001b', 7, 'system', 'x'.repeat(61), 'ok']), ['chaim-light', 'chaim', 'ok']);
+    same(ctx.menuVoices(['test24', 'chaim', 'moshe']), ['chaim', 'test24', 'moshe']);
+    same(ctx.menuVoices(undefined), ['chaim']);
+    same(ctx.menuVoices(['', 'a\u0001b', 7, 'system', 'x'.repeat(61), 'ok']), ['chaim', 'ok']);
+  });
+
+  await test('menuVoices: the light voice comes first, only when published or installed', () => {
+    const { ctx } = load(null);
+    same(ctx.menuVoices(['chaim'], [], true), ['chaim-light', 'chaim']);
+    same(ctx.menuVoices(['chaim'], ['chaim-light'], false), ['chaim-light', 'chaim']);
+    same(ctx.menuVoices(['chaim'], [], false), ['chaim']);
+    same(ctx.menuVoices(['chaim'], undefined, undefined), ['chaim']);
+    same(ctx.menuVoices(['chaim'], [], 'yes'), ['chaim']);
+  });
+
+  await test('the menu offers the light voice and its remove item only where the service says so', async () => {
+    const ids = async (status) => {
+      const { handlers, calls } = load(status === null ? null : () => [status]);
+      handlers['plugin.boot']({ theme: {} });
+      await settle();
+      const menu = lastMenu(calls);
+      return menu ? menu.payload.patch.children.map(c => c.id) : [];
+    };
+    const has = (list, id) => list.includes(id);
+    const none = await ids(null);  // no service
+    assert.ok(!has(none, 'voice-chaim-light') && !has(none, 'remove-light-model'), 'no service: ' + none);
+    const old = await ids({ voices: ['chaim'], voiceModel: true });  // a service 2.2.0: no light fields
+    assert.ok(!has(old, 'voice-chaim-light') && !has(old, 'remove-light-model'), 'old service: ' + old);
+    const unpublished = await ids({ voices: ['chaim'], lightVoices: [], lightModel: false, lightPublished: false, voiceModel: true });
+    assert.ok(!has(unpublished, 'voice-chaim-light') && !has(unpublished, 'remove-light-model'), 'unpublished: ' + unpublished);
+    const published = await ids({ voices: ['chaim'], lightVoices: [], lightModel: false, lightPublished: true, voiceModel: true });
+    assert.ok(has(published, 'voice-chaim-light') && has(published, 'remove-light-model'), 'published: ' + published);
+    const installed = await ids({ voices: ['chaim'], lightVoices: ['chaim-light'], lightModel: true, lightPublished: false, voiceModel: true });
+    assert.ok(has(installed, 'voice-chaim-light') && has(installed, 'remove-light-model'), 'installed: ' + installed);
+    assert.strictEqual(installed.indexOf('voice-chaim-light'), 1, 'the light voice follows the system voice: ' + installed);
   });
 
   await test('no menu exceeds 20 items; the voice menu keeps the system voice first', () => {
@@ -99,8 +130,11 @@ async function test(name, fn) {
     assert.strictEqual(g.voice[0].id, 'voice-system');
     assert.strictEqual(g.voice[0].title, '● אסף (של Windows)');
     assert.ok(g.voice.some(c => c.id === 'voice-v0'));
-    assert.strictEqual(g.voice[g.voice.length - 2].id, 'remove-voice-model');
-    assert.strictEqual(g.voice[g.voice.length - 1].id, 'remove-light-model');
+    assert.strictEqual(g.voice[g.voice.length - 1].id, 'remove-voice-model');
+    const withLight = ctx.menuGroups(['chaim-light'].concat(many));
+    assert.strictEqual(withLight.voice.length, 20);
+    assert.strictEqual(withLight.voice[withLight.voice.length - 2].id, 'remove-voice-model');
+    assert.strictEqual(withLight.voice[withLight.voice.length - 1].id, 'remove-light-model');
   });
 
   await test('voiceOfItem maps menu ids to voices', () => {

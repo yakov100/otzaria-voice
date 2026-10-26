@@ -34,7 +34,9 @@ const PACK_VOICES = ['chaim'];                      // always offered: choosing 
 const RECORDED_NAMES = { chaim: 'חיים' };           // display names; other ids are shown as they are
 // The light voice (ids end in '-light'): a small, fast model trained on the
 // recorded voice; its own download (GET /status: lightVoices, lightModel,
-// lightModelSize). Always offered too, so that choosing it starts the download.
+// lightModelSize). Offered only when the service says it is published
+// (lightPublished: true) or has it installed (lightVoices): without the
+// service, or with an older one that does not say, it is not in the menu.
 const LIGHT_SUFFIX = '-light';
 const LIGHT_VOICES = ['chaim-light'];
 const LIGHT_NAMES = { 'chaim-light': 'חיים קל' };
@@ -71,12 +73,14 @@ function isUsableVoiceId(voice) {
 }
 
 /**
- * The voices to offer: the light voice first, then the pack's voices (both
- * always, so that choosing one can start its download), then every other
- * installed voice, light ones included.
+ * The voices to offer: the light voice first when [offerLight] (it is
+ * published) or when it is installed, then the pack's voices (always, so that
+ * choosing one can start its download), then every other installed voice,
+ * light ones included.
  */
-function menuVoices(installed, installedLight) {
-  const out = LIGHT_VOICES.concat(PACK_VOICES);
+function menuVoices(installed, installedLight, offerLight) {
+  const light = Array.isArray(installedLight) ? installedLight : [];
+  const out = LIGHT_VOICES.filter(v => offerLight === true || light.includes(v)).concat(PACK_VOICES);
   const add = list => (Array.isArray(list) ? list : []).forEach(v => {
     if (isUsableVoiceId(v) && !out.includes(v)) out.push(v);
   });
@@ -121,9 +125,12 @@ function menuGroups(voices) {
     { id: 'save-chapter', title: 'שמור את הפרק כ-MP3', icon: 'fluent:arrow_download_24_regular' },
     { id: 'choose-folder', title: 'בחר תיקייה לשמירת MP3', icon: 'fluent:folder_open_24_regular' },
     { id: 'cancel-export', title: 'בטל את שמירת ה-MP3', icon: 'fluent:dismiss_circle_24_regular' },
-    { id: 'remove-voice-model', title: 'הסר את הקול המוקלט מהמחשב', icon: 'fluent:delete_24_regular' },
-    { id: 'remove-light-model', title: 'הסר את הקול הקל מהמחשב', icon: 'fluent:delete_24_regular' }
+    { id: 'remove-voice-model', title: 'הסר את הקול המוקלט מהמחשב', icon: 'fluent:delete_24_regular' }
   ];
+  // Removing the light voice is offered only where a light voice is.
+  if (voices.some(isLightVoice) || isLightVoice(state.mp3Voice)) {
+    save.push({ id: 'remove-light-model', title: 'הסר את הקול הקל מהמחשב', icon: 'fluent:delete_24_regular' });
+  }
   const main = [
     { id: 'play', title: 'הקרא / השהה', icon: 'play_24_regular' },
     { id: 'stop', title: 'עצור והתחל מחדש', icon: 'stop_24_regular' }
@@ -1198,7 +1205,7 @@ async function refreshVoiceMenu(status) {
       st = null;  // without the service the voices stay as known, but the choice is still shown
     }
   }
-  if (st) lastVoices = menuVoices(st.voices, st.lightVoices);
+  if (st) lastVoices = menuVoices(st.voices, st.lightVoices, st.lightPublished === true);
   return applyMenu(lastVoices);
 }
 

@@ -5,9 +5,9 @@
 // confirmation dialog. Messages are plain text, never HTML.
 
 const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
-// The newest voice service this plugin knows of (kVersion in service/src/service.cpp). The store
-// updates the plugin but not the service, so an older one is offered the download page.
-const LATEST_SERVICE = '2.2.1';
+// The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). The
+// store updates the plugin but not the service, so an older one is offered the download page.
+const LATEST_SERVICE = '2.5.0';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {
@@ -205,7 +205,8 @@ async function offerServiceUpdate(st) {
   } catch (_) {}
   const ok = await ask(
     'עדכון לשירות הדיבור',
-    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), עם מודל זיהוי חדש שמכוון להגייה ישיבתית ולארמית, והכתבה מהירה יותר (המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה).\n' +
+    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מהירה יותר: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
+      'שימו לב: בגרסה הזו הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n' +
       'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n' +
       'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
       'לפתוח את דף ההורדה?',
