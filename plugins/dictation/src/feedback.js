@@ -73,9 +73,11 @@ async function getInstaller(platform) {
     let res = null;
     try {
       res = await Otzaria.call('network.download', { url: WINDOWS_INSTALLER });
-    } catch (_) {
-      res = null;
+    } catch (e) {
+      res = { success: false, error: { message: String((e && e.message) || e) } };
     }
+    // Why the page opens instead (permission, allowlist, network) shows in Otzaria's log.
+    if (!res || !res.success) console.warn('voice-search: installer download failed', JSON.stringify(res && res.error));
     if (res && res.success && res.data && res.data.path) {
       await ask(
         'תוכנת ההתקנה ירדה',
