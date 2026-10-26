@@ -5,13 +5,13 @@
 released  minAppVersion 0.9.98 (Otzaria as released today): a microphone
           button in the reader's toolbar and a keyboard shortcut; the result
           opens in a search tab.
-next      minAppVersion 0.9.99 (Otzaria with search-field actions, see
+next      minAppVersion 0.9.98.1 (Otzaria with search-field actions, see
           docs/dictation/search-field-actions-contract.md): the same, plus a microphone
           inside Otzaria's search fields that writes into the field.
 
 Why two: Otzaria rejects a manifest whose permission it does not know
 (search.field_actions on 0.9.98), and its packager rejects a plugin that
-calls an API newer than its minAppVersion (search.setFieldText is 0.9.99).
+calls an API newer than its minAppVersion (search.setFieldText is 0.9.98.1).
 So the field-action code and declarations exist only in the "next" build.
 
 Each output folder is a complete plugin: lint it, then pack it with
@@ -32,6 +32,11 @@ VARIANTS = {
     "next": {"files": COMMON + ["field_actions.js", "main.js"]},
 }
 
+# The "next" package is the plugin's next version: what the store gets once an
+# Otzaria with search-field actions (0.9.98.1) is released. It is newer than the
+# released package, so it installs over it.
+NEXT_VERSION = "2.3.0"
+
 FIELD_ACTION = {
     "id": "dictate",
     "title": "חיפוש בדיבור",
@@ -44,8 +49,8 @@ FIELD_ACTION = {
 def manifest_for(name):
     m = json.loads((ROOT / "manifest.base.json").read_text(encoding="utf-8"))
     if name == "next":
-        m["version"] = "2.1.1"
-        m["minAppVersion"] = "0.9.99"
+        m["version"] = NEXT_VERSION
+        m["minAppVersion"] = "0.9.98.1"
         m["permissions"].append("search.field_actions")
         m["contributes"]["startup"]["searchFieldActions"] = [FIELD_ACTION]
     return m

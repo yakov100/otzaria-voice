@@ -78,7 +78,7 @@ jobs:
           if-no-files-found: error
 
       # "next" needs an Otzaria newer than the released one (search.field_actions,
-      # minAppVersion 0.9.99): today's validator may reject it. It is packed anyway
+      # minAppVersion 0.9.98.1): today's validator may reject it. It is packed anyway
       # for testing with a development build of Otzaria, and never published.
       - name: ולידציה (next) — מותר להיכשל
         id: next
@@ -102,7 +102,7 @@ jobs:
             cp "$NEXT_FILE" "$target"
             echo "next: עבר ולידציה ונארז על ידי הכלי הרשמי."
           else
-            echo "::warning::חבילת next ($v) לא עברה את כלי הוולידציה הנוכחי (צפוי: היא דורשת אוצריא 0.9.99 והרשאה search.field_actions שעדיין לא שוחררו). נארזה ידנית לבדיקה בלבד; לא תפורסם."
+            echo "::warning::חבילת next ($v) לא עברה את כלי הוולידציה הנוכחי (צפוי: היא דורשת אוצריא 0.9.98.1 והרשאה search.field_actions שעדיין לא שוחררו). נארזה ידנית לבדיקה בלבד; לא תפורסם."
             (cd plugins/dictation/packages/next && zip -q -r -X "$GITHUB_WORKSPACE/$target" .)
           fi
           unzip -l "$target"
