@@ -7,7 +7,8 @@
 // ends it; the user presses Enter to search. See
 // docs/dictation/search-field-actions-contract.md.
 //
-// Only the 0.9.98.1 build of the plugin contains this file (plugins/dictation/build.py).
+// Every build contains this file since plugin 2.3.0, whose minAppVersion is 0.9.98.1
+// (plugins/dictation/build.py); users of Otzaria 0.9.98 keep plugin 2.2.x.
 
 const FIELD_ACTION_ID = 'dictate';
 let fieldSession = null; // { sessionId, sent, pending, writing }

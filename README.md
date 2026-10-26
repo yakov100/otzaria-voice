@@ -121,8 +121,8 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 - `service/`: קוד שירות הדיבור (C++, נבנה עם CMake). `service/src/common/` משותף להכתבה ולהקראה, `service/src/dictation/` להכתבה בלבד ו-`service/src/tts/` להקראה בלבד. כלי העזר ב-`tools/dictation/` וב-`tools/tts/`, והתיעוד ב-`docs/dictation/`, `docs/tts/` ו-`docs/shared/`, ו-`service/android/` לאפליקציית האנדרואיד. פרטים בקובץ `docs/shared/platforms.md`.
 - `plugins/read-aloud/`: התוסף "הקראה קולית", כפי שהוא נארז (`otzaria pack-plugin plugins/read-aloud`).
 - `plugins/dictation/`: מקורות התוסף "חיפוש בדיבור". הפקודה `python plugins/dictation/build.py` יוצרת ממנו שתי חבילות:
-  - `released`: לגרסת אוצריא הנוכחית. זו החבילה שמתפרסמת בחנות ובדף הגרסאות.
-  - `next`: לגרסת אוצריא הבאה (כפתור מיקרופון בתוך שדות החיפוש). היא נבנית רק כקובץ לבדיקה, ולא מתפרסמת.
+  - `released`: זו החבילה שמתפרסמת בחנות ובדף הגרסאות. מגרסה 2.3.0 היא דורשת אוצריא 0.9.98.1 ומעלה, וכוללת כפתור מיקרופון בתוך שדות החיפוש. באוצריא 0.9.98 נשארים עם 2.2.3.
+  - `next`: מקום לחבילה שדורשת אוצריא חדשה יותר מזו שבחנות. היא נבנית רק כקובץ לבדיקה, ולא מתפרסמת. כרגע היא זהה ל-`released`.
 - `installer/`: סקריפטים לבניית המתקינים לכל מערכת.
 - `.github/workflows/`: שלושה תהליכי בנייה נפרדים, וכל אחד רץ רק כשמשנים את החלק שלו:
   - `service.yml`: השירות לכל המערכות והמתקינים (רץ כשמשתנה `service/` או `installer/`). הוא מתקין כל מתקין על מחשב הבדיקה (באנדרואיד: באמולטור), מריץ דרכו הכתבה, ומעלה את הקבצים. כשמעלים את `kVersion` ב-`service/src/common/service.cpp` ודוחפים ל-`main`, נוצרת גרסה `service-vX.Y.Z` בדף הגרסאות. זו הגרסה המסומנת "latest", כי התוספים מורידים ממנה את המתקין.
