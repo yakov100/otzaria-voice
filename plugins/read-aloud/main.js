@@ -1571,8 +1571,10 @@ const SERVICE_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest'
 
 /**
  * The service is not running: offer its installer. network.download puts it
- * in the Downloads folder (once Otzaria's allowlist names the repository);
- * until then, or if that fails, the release page opens in the browser.
+ * in the Downloads folder. GitHub redirects SERVICE_INSTALLER to
+ * releases/download/<tag>/..., and Otzaria checks every hop against the
+ * manifest's network.allowlist, so that prefix is listed there too. If the
+ * download fails, the release page opens in the browser.
  */
 async function offerServiceInstall() {
   const ok = await call('ui.showConfirm', {
@@ -1583,7 +1585,7 @@ async function offerServiceInstall() {
   if (!ok.success || !ok.data || !ok.data.confirmed) return;
   const dl = await call('network.download', { url: SERVICE_INSTALLER });
   if (dl.success && dl.data && dl.data.path) {
-    message('תוכנת ההתקנה ירדה: ' + dl.data.path + '. יש להפעיל אותה פעם אחת, ואז לנסות שוב.');
+    message('תוכנת ההתקנה ירדה: ' + dl.data.path + '. יש לפתוח אותה פעם אחת (לחיצה כפולה; אם Windows מציגה «Windows הגן על המחשב»: «מידע נוסף» ואז «הפעל בכל זאת»), ואז לנסות שוב.');
     return;
   }
   const opened = await call('app.openUrl', { url: SERVICE_PAGE });

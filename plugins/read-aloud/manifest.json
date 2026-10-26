@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "org.otzaria.read-aloud",
   "name": "הקראה קולית",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "description": "מקריא בקול את הספר הפתוח ומדגיש את הנקרא, ושומר פרק או קטע מסומן כקובץ MP3, בקול של Windows או בקול מוקלט. עובד בלי אינטרנט.",
   "author": "yakov100",
   "homepage": "https://github.com/yakov100/otzaria-voice",
@@ -30,7 +30,8 @@
     "enabled": true,
     "allowlist": [
       "http://127.0.0.1:47811",
-      "https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe"
+      "https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe",
+      "https://github.com/yakov100/otzaria-voice/releases/download"
     ]
   },
   "contributes": {
