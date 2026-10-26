@@ -131,7 +131,9 @@ Plugin side (as built): runtime detection alone is not enough, because one
 package cannot serve both hosts — 0.9.98 rejects the unknown permission
 `search.field_actions` at install, and the packager rejects calls to
 `search.setFieldText` & co. under `minAppVersion` 0.9.98. So `plugins/dictation/build.py`
-produces two packages from one source: `released` (0.9.98, toolbar button +
-shortcut, no field-action code) and `next` (0.9.98.1, adds the permission, the
-`searchFieldActions` item with `fields: fullText, library, inBook, findRef`, and
-the handlers). The next package keeps the toolbar button and shortcut too.
+produced two packages from one source until plugin 2.2.3: `released` (0.9.98,
+toolbar button + shortcut, no field-action code) and `next` (0.9.98.1, adds the
+permission, the `searchFieldActions` item with `fields: fullText, library,
+inBook, findRef`, and the handlers). From plugin 2.3.0 the field action is in
+the released package itself (`minAppVersion` 0.9.98.1, set in
+`plugins/dictation/manifest.base.json`); users of Otzaria 0.9.98 keep 2.2.3.

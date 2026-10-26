@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      minapp: ${{ steps.ver.outputs.minapp }}
     env:
       HAS_STORE_SECRETS: ${{ secrets.OTZARIA_USER != '' && secrets.OTZARIA_PASSWORD != '' }}
       PUBLISH: ${{ inputs.publish || 'auto' }}
@@ -62,6 +63,7 @@ jobs:
             echo "::error::גרסה לא תקינה בתוסף: '$version' (צפוי X.Y.Z)"; exit 1
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "minapp=$(python3 -c "import json; print(json.load(open('plugins/dictation/packages/released/manifest.json', encoding='utf-8'))['minAppVersion'])")" >>"$GITHUB_OUTPUT"
 
       - name: ולידציה ואריזה (released)
         id: build
@@ -104,7 +106,7 @@ jobs:
             cp "$NEXT_FILE" "$target"
             echo "next: עבר ולידציה ונארז על ידי הכלי הרשמי."
           else
-            echo "::warning::חבילת next ($v) לא עברה את כלי הוולידציה הנוכחי (צפוי: היא דורשת אוצריא 0.9.98.1 והרשאה search.field_actions שעדיין לא שוחררו). נארזה ידנית לבדיקה בלבד; לא תפורסם."
+            echo "::warning::חבילת next ($v) לא עברה את כלי הוולידציה הנוכחי (היא מיועדת לגרסת אוצריא חדשה יותר מזו שבחנות). נארזה ידנית לבדיקה בלבד; לא תפורסם."
             (cd plugins/dictation/packages/next && zip -q -r -X "$GITHUB_WORKSPACE/$target" .)
           fi
           unzip -l "$target"
@@ -167,6 +169,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: dictation-v${{ needs.plugin.outputs.version }}
       LEGACY_TAG: v${{ needs.plugin.outputs.version }}
+      MINAPP: ${{ needs.plugin.outputs.minapp }}
     steps:
       - name: האם ה-Release כבר קיים
         id: check
@@ -194,4 +197,4 @@ jobs:
           # --latest=false: the service release stays "latest" (the plugins fetch the installer from it).
           gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "תוסף חיפוש בדיבור (הכתבה) $TAG" --latest=false \
-            --notes "קובץ התוסף (.otzplugin) של חיפוש בדיבור (הכתבה). מתקינים מחנות התוספים של אוצריא, או מהקובץ: כלים ← תוספים ← התקנת תוסף חדש. התוסף צריך את שירות הדיבור: https://github.com/$GITHUB_REPOSITORY/releases/latest"
+            --notes "קובץ התוסף (.otzplugin) של חיפוש בדיבור (הכתבה). מתקינים מחנות התוספים של אוצריא, או מהקובץ: כלים ← תוספים ← התקנת תוסף חדש. התוסף דורש אוצריא $MINAPP ומעלה (באוצריא ישנה יותר מתקינים גרסה קודמת של התוסף מדף הגרסאות). התוסף צריך את שירות הדיבור: https://github.com/$GITHUB_REPOSITORY/releases/latest"

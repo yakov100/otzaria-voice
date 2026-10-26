@@ -11,9 +11,11 @@ next      the slot for a build that needs an Otzaria newer than the released
           one. Today there is none, so it is the same as "released"; the
           workflow still packs it as a test artifact.
 
-Users of Otzaria 0.9.98 keep the 2.2.x plugin: Otzaria refuses a plugin whose
-minAppVersion is newer than itself, and its packager refuses a plugin that
-calls an API newer than its minAppVersion (search.setFieldText is 0.9.98.1).
+Users of Otzaria 0.9.98 keep the 2.2.x plugin: Otzaria 0.9.98 does not know the
+search.field_actions permission and refuses the manifest (how it compares a
+four-part minAppVersion was not checked), and Otzaria's packager refuses a
+plugin that calls an API newer than its minAppVersion (search.setFieldText is
+0.9.98.1), so one package cannot serve both.
 
 Each output folder is a complete plugin: lint it, then pack it with
 `otzaria pack-plugin <folder>`.
