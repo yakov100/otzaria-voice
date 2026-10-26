@@ -53,12 +53,12 @@ function load({ status, download }) {
 const settle = () => new Promise(r => setTimeout(r, 30));
 const of = (calls, method) => calls.filter(c => c.method === method);
 
-/** Boots the plugin on [platform] and presses the microphone once. */
+/** Boots the plugin on [platform] and presses the shortcut once. */
 async function press(platform, opts) {
   const h = load(opts);
   h.handlers['plugin.boot']({ app: { platform } });
   await settle();
-  await h.handlers['reader.toolbar_item_clicked']({ itemId: 'dictate' });
+  await h.handlers['app.command']({ command: 'dictate' });  // the Ctrl+Alt+V shortcut
   await settle();
   return h.calls;
 }
@@ -146,6 +146,17 @@ async function test(name, fn) {
     assert.ok(ask[0].title === 'עדכון לשירות הדיבור' && ask[0].content.includes('להוריד את העדכון עכשיו?'), JSON.stringify(ask[0]));
     assert.strictEqual(of(calls, 'network.download').length, 1);
     assert.strictEqual(of(calls, 'app.openUrl').length, 0);
+  });
+
+  await test('no toolbar button from 2.3.1; the shortcut and the field microphone stay', () => {
+    const m = JSON.parse(fs.readFileSync(path.join(root, 'manifest.base.json'), 'utf8'));
+    assert.ok(!m.contributes.startup.toolbarItems, 'toolbarItems is still declared');
+    assert.ok(!m.permissions.includes('reader.toolbar'), 'reader.toolbar is still declared');
+    const sc = m.contributes.startup.shortcuts.find(s => s.command === 'dictate');
+    assert.ok(sc && sc.key === 'ctrl+alt+v', 'the Ctrl+Alt+V shortcut is missing');
+    assert.ok(m.permissions.includes('app.shortcuts'), 'app.shortcuts is missing');
+    assert.strictEqual(m.contributes.startup.searchFieldActions[0].id, 'dictate');
+    assert.ok(!/reader\.updateToolbarItem|toolbar_item_clicked/.test(bundle), 'the code still uses the toolbar');
   });
 
   await test('the manifest lets Otzaria download the installer, every hop of it', () => {

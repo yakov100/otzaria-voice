@@ -4,9 +4,9 @@
 
 released  minAppVersion 0.9.98.1 (Otzaria with search-field actions, see
           docs/dictation/search-field-actions-contract.md): a microphone
-          button in the reader's toolbar, a keyboard shortcut, and a
-          microphone inside Otzaria's search fields that writes into the
-          field. This is the store/release build (from 2.3.0).
+          inside Otzaria's search fields that writes into the field, and a
+          keyboard shortcut that opens a library search (the reader's toolbar
+          button is gone from 2.3.1). This is the store/release build (from 2.3.0).
 next      the slot for a build that needs an Otzaria newer than the released
           one. Today there is none, so it is the same as "released"; the
           workflow still packs it as a test artifact.

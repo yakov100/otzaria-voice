@@ -1,21 +1,14 @@
-// ------------------------------------------------- toolbar button and shortcut
+// ------------------------------------------------------------- shortcut
 //
-// The microphone button in the reader's toolbar and the keyboard shortcut
-// (default Ctrl+Alt+V; Settings -> Keyboard shortcuts -> plugin shortcuts) both
-// run the same thing: listen, show the words as they are recognized, and open a
+// The keyboard shortcut (default Ctrl+Alt+V; Settings -> Keyboard shortcuts ->
+// plugin shortcuts): listen, show the words as they are recognized, and open a
 // search tab that searches the text at once. (A tab opened without searching
 // shows an empty page with no visible search field in a narrow window, so the
-// user saw nothing at all.)
-
-const TOOLBAR_ID = 'dictate';
-const TOOLBAR_IDLE = { icon: 'mic_24_regular', title: 'חיפוש בדיבור' };
-const TOOLBAR_ACTIVE = { icon: 'mic_24_filled', title: 'סיום הדיבור' };
+// user saw nothing at all.) Until 2.3.0 a microphone button in the reader's
+// toolbar ran this too; from 2.3.1 the microphone is inside the search fields
+// (field_actions.js), and the toolbar button is gone.
 
 let searchSession = false;
-
-function setToolbar(patch) {
-  return Otzaria.call('reader.updateToolbarItem', { id: TOOLBAR_ID, patch }).catch(() => {});
-}
 
 async function toggleSearchDictation() {
   if (isDictating()) {
@@ -27,7 +20,6 @@ async function toggleSearchDictation() {
   try {
     const st = await readyToDictate();
     if (!st) return;
-    setToolbar(TOOLBAR_ACTIVE);
     say('פותח את המיקרופון… אפשר כבר לדבר');
     let result;
     try {
@@ -60,6 +52,5 @@ async function toggleSearchDictation() {
     else say('מחפש: ' + result.text);
   } finally {
     searchSession = false;
-    setToolbar(TOOLBAR_IDLE);
   }
 }

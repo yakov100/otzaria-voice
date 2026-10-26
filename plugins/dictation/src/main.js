@@ -10,13 +10,7 @@ let platformName = '';
 
 Otzaria.on('plugin.boot', (payload) => {
   platformName = (payload && payload.app && payload.app.platform) || '';
-  // A previous engine may have been closed in the middle of a dictation.
-  setToolbar(TOOLBAR_IDLE);
   warmService();
-});
-
-Otzaria.on('reader.toolbar_item_clicked', (ev) => {
-  if (ev && ev.itemId === TOOLBAR_ID) toggleSearchDictation();
 });
 
 Otzaria.on('app.command', (ev) => {
