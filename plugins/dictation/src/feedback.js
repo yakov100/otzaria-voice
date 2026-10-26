@@ -5,6 +5,12 @@
 // confirmation dialog. Messages are plain text, never HTML.
 
 const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
+// The Windows installer of the newest service. Otzaria downloads it itself (network.download) into
+// the Downloads folder. GitHub redirects this address to releases/download/<tag>/..., and Otzaria
+// checks every hop, so both prefixes are in the manifest's network.allowlist (and in Otzaria's
+// official allowlist, plugin_network_allowlist.txt).
+const WINDOWS_INSTALLER =
+  'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
 // The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). The
 // store updates the plugin but not the service, so an older one is offered the download page.
 const LATEST_SERVICE = '2.5.0';
@@ -55,6 +61,39 @@ const caption = (() => {
   };
 })();
 
+/**
+ * Gets the service's installer to the user from inside Otzaria. On Windows Otzaria downloads it
+ * into the Downloads folder; a plugin cannot start a program, so the user opens the file once.
+ * Elsewhere (no single installer file to fetch), or when the download fails, the download page
+ * opens in the browser instead. True when the installer was downloaded or the page opened.
+ */
+async function getInstaller(platform) {
+  if (platform === 'windows') {
+    say('מוריד את תוכנת ההתקנה של שירות הדיבור…');
+    let res = null;
+    try {
+      res = await Otzaria.call('network.download', { url: WINDOWS_INSTALLER });
+    } catch (e) {
+      res = { success: false, error: { message: String((e && e.message) || e) } };
+    }
+    // Why the page opens instead (permission, allowlist, network) shows in Otzaria's log.
+    if (!res || !res.success) console.warn('voice-search: installer download failed', JSON.stringify(res && res.error));
+    if (res && res.success && res.data && res.data.path) {
+      await ask(
+        'תוכנת ההתקנה ירדה',
+        'הקובץ נשמר בתיקיית ההורדות:\n' + res.data.path + '\n\n' +
+          'פתחו אותו פעם אחת (לחיצה כפולה). אם Windows מציגה «Windows הגן על המחשב», לוחצים «מידע נוסף» ואז «הפעל בכל זאת».\n' +
+          'אחרי ההתקנה לחצו שוב על המיקרופון.',
+      );
+      return true;
+    }
+  }
+  const res = await Otzaria.call('app.openUrl', { url: DOWNLOAD_PAGE });
+  if (res && res.success) return true;
+  sayError('לא ניתן לפתוח את דף ההורדה: ' + DOWNLOAD_PAGE);
+  return false;
+}
+
 /** The service is not answering: not installed, or not started. */
 async function explainNoService(platform) {
   const content =
@@ -64,11 +103,10 @@ async function explainNoService(platform) {
         'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה.'
       : 'הזיהוי נעשה בתוכנה קטנה שרצה ברקע במחשב, בלי אינטרנט.\n' +
         'אם היא מותקנת — הפעילו מחדש את המחשב, והיא תעלה מעצמה.\n' +
-        'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה, הורידו את תוכנת ההתקנה והפעילו אותה פעם אחת.';
-  if (await ask('שירות הדיבור לא פועל', content)) {
-    const res = await Otzaria.call('app.openUrl', { url: DOWNLOAD_PAGE });
-    if (!res || !res.success) sayError('לא ניתן לפתוח את דף ההורדה: ' + DOWNLOAD_PAGE);
-  }
+        (platform === 'windows'
+          ? 'אם לא — לחצו «אישור», ואוצריא תוריד את תוכנת ההתקנה (כ-2.5 מגה-בייט) לתיקיית ההורדות. פותחים אותה פעם אחת, וזהו.'
+          : 'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה, הורידו את תוכנת ההתקנה והפעילו אותה פעם אחת.');
+  if (await ask('שירות הדיבור לא פועל', content)) await getInstaller(platform);
 }
 
 // ------------------------------------------------------------ voice pack
@@ -203,22 +241,23 @@ async function offerServiceUpdate(st) {
     const [version, at] = String((saved && saved.success && saved.data) || '').split(':');
     if (version === LATEST_SERVICE && Date.now() - Number(at) < SERVICE_UPDATE_ASK_AGAIN_MS) return false;
   } catch (_) {}
+  const platform = st.platform || platformName;
+  const windows = platform === 'windows';
   const ok = await ask(
     'עדכון לשירות הדיבור',
     'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מהירה יותר: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
       'שימו לב: בגרסה הזו הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n' +
-      'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n' +
+      (windows
+        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון אוצריא תוריד את תוכנת ההתקנה החדשה (כ-2.5 מגה-בייט) לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
+        : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
       'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
-      'לפתוח את דף ההורדה?',
+      (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
   );
   try {
     await Otzaria.call('storage.set', { key, value: LATEST_SERVICE + ':' + Date.now() });
   } catch (_) {}
   if (!ok) return false;
-  const res = await Otzaria.call('app.openUrl', { url: DOWNLOAD_PAGE });
-  if (res && res.success) return true;
-  sayError('לא ניתן לפתוח את דף ההורדה: ' + DOWNLOAD_PAGE);
-  return false;
+  return getInstaller(platform);
 }
 
 /** Why a dictation could not run, in words the user can act on. */
