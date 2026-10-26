@@ -48,7 +48,8 @@ Windows. השירות נחוץ רק לשמירה כ-MP3 ולקול המוקלט.
   הגדרות Windows ← זמן ושפה ← דיבור ← הוספת קולות ← עברית.
 - **שמירה כ-MP3** דורשת את שירות הדיבור. בפעם הראשונה התוסף מציע להוריד אותו.
 - **הקול המוקלט "חיים"**: בפעם הראשונה שבוחרים בו, התוסף מציע להוריד את חבילת הקול
-  (כ-900 מגה-בייט, הורדה חד-פעמית). ההכנה של קובץ בקול הזה איטית: בערך פי 1.7 מאורך ההקראה.
+  (כ-900 מגה-בייט, הורדה חד-פעמית). ההכנה של קובץ בקול הזה איטית: בערך כאורך ההקראה (במחשב עם 10 ליבות).
+  בנוסף יורד בשקט מילון ניקוד קטן (כ-1.2 מגה-בייט) שמשפר את הניקוד של ארמית ולשון חז"ל.
 - **הסרה**: את התוסף מסירים מפאנל התוספים של אוצריא. את הקול המוקלט אפשר למחוק מהתפריט
   שליד כפתור הרמקול ("הסר את הקול המוקלט מהמחשב"). את שירות הדיבור, יחד עם כל חבילות הקול,
   מסירים דרך הגדרות Windows ← אפליקציות ← Otzaria Voice ← הסרה.
@@ -117,19 +118,21 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 
 ## למפתחים
 
-- `service/`: קוד שירות הדיבור (C++, נבנה עם CMake), ו-`service/android/` לאפליקציית האנדרואיד. פרטים בקובץ `docs/platforms.md`.
-- `plugin-tts/`: התוסף "הקראה קולית", כפי שהוא נארז (`otzaria pack-plugin plugin-tts`).
-- `plugin/`: מקורות התוסף "חיפוש בדיבור". הפקודה `python plugin/build.py` יוצרת ממנו שתי חבילות:
+- `service/`: קוד שירות הדיבור (C++, נבנה עם CMake). `service/src/common/` משותף להכתבה ולהקראה, `service/src/dictation/` להכתבה בלבד ו-`service/src/tts/` להקראה בלבד. כלי העזר ב-`tools/dictation/` וב-`tools/tts/`, והתיעוד ב-`docs/dictation/`, `docs/tts/` ו-`docs/shared/`, ו-`service/android/` לאפליקציית האנדרואיד. פרטים בקובץ `docs/shared/platforms.md`.
+- `plugins/read-aloud/`: התוסף "הקראה קולית", כפי שהוא נארז (`otzaria pack-plugin plugins/read-aloud`).
+- `plugins/dictation/`: מקורות התוסף "חיפוש בדיבור". הפקודה `python plugins/dictation/build.py` יוצרת ממנו שתי חבילות:
   - `released`: לגרסת אוצריא הנוכחית. זו החבילה שמתפרסמת בחנות ובדף הגרסאות.
   - `next`: לגרסת אוצריא הבאה (כפתור מיקרופון בתוך שדות החיפוש). היא נבנית רק כקובץ לבדיקה, ולא מתפרסמת.
 - `installer/`: סקריפטים לבניית המתקינים לכל מערכת.
-- `.github/workflows/build.yml`: בכל דחיפה בונה את השירות לכל המערכות, את המתקינים ואת התוסף.
-  הוא מתקין כל מתקין על מחשב הבדיקה (באנדרואיד: באמולטור), מריץ דרכו הכתבה, ומעלה את כל הקבצים כ-Artifacts של הריצה.
-  כשמעלים את מספר הגרסה ב-`plugin/manifest.base.json` ודוחפים ל-`main`, נוצרת גרסה חדשה בדף הגרסאות עם כל הקבצים. התוסף אינו מתפרסם בחנות בדחיפה רגילה (ראו "פרסום לחנות אוצריא").
+- `.github/workflows/`: שלושה תהליכי בנייה נפרדים, וכל אחד רץ רק כשמשנים את החלק שלו:
+  - `service.yml`: השירות לכל המערכות והמתקינים (רץ כשמשתנה `service/` או `installer/`). הוא מתקין כל מתקין על מחשב הבדיקה (באנדרואיד: באמולטור), מריץ דרכו הכתבה, ומעלה את הקבצים. כשמעלים את `kVersion` ב-`service/src/common/service.cpp` ודוחפים ל-`main`, נוצרת גרסה `service-vX.Y.Z` בדף הגרסאות. זו הגרסה המסומנת "latest", כי התוספים מורידים ממנה את המתקין.
+  - `dictation.yml`: תוסף "חיפוש בדיבור". כשמעלים את `version` ב-`plugins/dictation/manifest.base.json` ודוחפים ל-`main`, נוצרת גרסה `dictation-vX.Y.Z`.
+  - `read-aloud.yml`: תוסף "הקראה קולית". כשמעלים את `version` ב-`plugins/read-aloud/manifest.json` ודוחפים ל-`main`, נוצרת גרסה `read-aloud-vX.Y.Z`.
+  גרסאות התוספים אינן מסומנות "latest", והתוספים אינם מתפרסמים בחנות בדחיפה רגילה (ראו "פרסום לחנות אוצריא").
 
 ### פרסום לחנות אוצריא
 
-הפרסום לחנות נעשה רק במכוון: בהפעלה ידנית של הבנייה בענף `main` (**Actions ← בנייה ואריזה ← Run workflow**), או בכל דחיפה ל-`main` כשהמשתנה `PUBLISH_DICTATION` במאגר הוא `true`. דחיפה רגילה ל-`main` בונה ויוצרת גרסה בגיטהאב, ומשאירה את החנות כמות שהיא. כדי שהפרסום יעבוד צריך להגדיר במאגר (**Settings ← Secrets and variables ← Actions**):
+הפרסום לחנות נעשה רק במכוון: בהפעלה ידנית של הבנייה בענף `main` (**Actions ← תוסף חיפוש בדיבור (הכתבה) ← Run workflow**), או בכל דחיפה ל-`main` כשהמשתנה `PUBLISH_DICTATION` במאגר הוא `true`. דחיפה רגילה ל-`main` בונה ויוצרת גרסה בגיטהאב, ומשאירה את החנות כמות שהיא. כדי שהפרסום יעבוד צריך להגדיר במאגר (**Settings ← Secrets and variables ← Actions**):
 
 - סוד `OTZARIA_USER`: שם המשתמש או האימייל בחנות.
 - סוד `OTZARIA_PASSWORD`: הסיסמה לחנות.
@@ -149,8 +152,36 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
   `6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048`.
 - **הקראה בקול מוקלט**: [`voice-model-v1`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-model-v1),
   `3a757b8888699a48661bb1b43096bf5cf00035b6b23d8e3fdf4152d5b4c2af06`. נבנית מתיקיית מודלים
-  עובדת בפקודה `python service/tools/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)
-  נוצר מהקלטה בעזרת `service/tools/make_voice.py`. פרטי המודלים ב-`docs/tts-research.md`.
+  עובדת בפקודה `python tools/tts/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)
+  נוצר מהקלטה בעזרת `tools/tts/make_voice_from_wav.py` (ראו להלן). פרטי המודלים ב-`docs/tts/tts-research.md`.
+
+### הוספת קול מוקלט משלכם
+
+ההקראה בקול מוקלט משכפלת קול מתוך הקלטה קצרה. החבילה מגיעה עם קול אחד ("חיים"), ואפשר להוסיף עוד:
+
+1. מקליטים דובר אחד, 10 עד 30 שניות של דיבור נקי (בלי מוזיקה ורעש), בכל פורמט נפוץ
+   (WAV, FLAC, OGG, בכל קצב דגימה). רק 10 השניות הראשונות של הדיבור נכנסות לקול, זו מגבלת המודל,
+   ולכן כדאי שיהיו רצופות וברורות.
+2. מריצים פעם אחת `pip install numpy onnxruntime soundfile huggingface_hub`, ואז:
+
+   ```bash
+   python tools/tts/make_voice_from_wav.py recording.wav moshe.otzvoice
+   ```
+
+   בהרצה הראשונה הסקריפט מוריד את מקודד הדיבור של Chatterbox Multilingual (כ-590MB) לתיקיית
+   `%LOCALAPPDATA%\OtzariaVoice\speech_encoder` (ב-Linux/macOS: `~/.cache/otzaria-voice/speech_encoder`;
+   `--speech-encoder <תיקייה>` או משתנה הסביבה `OTZARIA_SPEECH_ENCODER` בוחרים מקום אחר).
+   המקודד מריץ על ההקלטה את ארבעת המערכים שהמקריא צריך (`cond_emb`, `prompt_token`,
+   `ref_x_vector`, `prompt_feat`) וכותב אותם לקובץ `.otzvoice` של כ-300KB. `--start <שניות>` מדלג על
+   תחילת ההקלטה, ו-`--no-trim` משאיר את השקט בתחילתה ובסופה.
+3. מעתיקים את הקובץ ל-`%APPDATA%\otzaria\tts\voices\<מזהה>.otzvoice` (ב-Linux/macOS: תיקיית הנתונים
+   של אוצריא, `tts/voices`). המזהה הוא שם הקובץ בלי הסיומת, באותיות לטיניות. השירות מוצא את הקובץ
+   בהפעלה הבאה ומחזיר את המזהה ברשימת `voices` של `GET /status`.
+4. בתפריט ההקראה באוצריא מופיע פריט "קול לשמירה: <מזהה> (מוקלט)" לכל קול מותקן: התוסף קורא את רשימת
+   `voices` מהשירות כשהוא עולה (בלחיצה הראשונה על אחד מפריטי התפריט, או בהפעלת אוצריא כשהתוסף מורשה
+   לרוץ ברקע), בכל בחירת קול, ואחרי הורדה או הסרה של חבילת הקול. קול שהונח בתיקייה בזמן שאוצריא
+   פתוחה מופיע אחרי בחירת קול כלשהי בתפריט. התפריט מוגבל ל-20 פריטים, כלומר לעשרה קולות מוקלטים.
+   השירות עצמו מכיר את הקול בלי שום הגדרה: `POST /speak` עם `"voice":"<מזהה>"` משתמש בו.
 
 ## רישיונות וקרדיטים
 
@@ -171,6 +202,10 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 - **ניקוד אוטומטי:** [Phonikud](https://github.com/thewh1teagle/phonikud) (רישיון MIT, [גרסת ONNX](https://huggingface.co/thewh1teagle/phonikud-onnx)),
   המבוסס על [DictaBERT-large-char-menaked](https://huggingface.co/dicta-il/dictabert-large-char-menaked) של דיקטה,
   רישיון CC BY 4.0.
+- **מילון הניקוד** (`nikud_lexicon-v1.zip`, הורדה נפרדת): נבנה בפרויקט (`tools/tts/build_nikud_lexicon.py`) מספירת
+  הניקוד של כל מילה ב[תלמוד הבבלי המנוקד של דיקטה](https://github.com/Dicta-Israel-Center-for-Text-Analysis/Talmud-Bavli-with-Nikud)
+  (CC BY-SA; ניקוד התלמוד: דיקטה - המרכז הישראלי לניתוח טקסטים) ובספרים המנוקדים של ספריית אוצריא שרישיונם
+  נחלת הכלל או CC BY / CC BY-SA. המילון מופץ ב-CC BY-SA 4.0 ומכיל מילים וניקודן בלבד, לא טקסט.
 - **הקול "חיים":** נגזר בפרויקט מהקלטה של אחד ממשתתפיו, בהסכמתו, לשימוש בהקראה בשירות הזה.
   הקובץ מכיל רק את מאפייני הדובר שהמודלים צריכים, לא הקלטה.
 - **ההקראה בקול "אסף"** (בלי השירות) משתמשת בקול העברי המובנה של Windows.

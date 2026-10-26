@@ -1,0 +1,131 @@
+name: תוסף הקראה קולית
+
+# Validates and packs the plugin "הקראה קולית" (plugins/read-aloud/), uploads the .otzplugin as
+# a workflow artifact, and on pushes to main whose version has no GitHub Release
+# yet creates Release read-aloud-v<version> with the plugin file. That release is
+# created with --latest=false: "latest" must stay the service release
+# (service.yml), because the plugins download the installer from
+# releases/latest/download/...
+#
+# Store publishing is unchanged: only on main, only with the store secrets
+# OTZARIA_USER and OTZARIA_PASSWORD, and only when PUBLISH_READ_ALOUD is "true"
+# (the repository variable).
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'plugins/read-aloud/**'
+      - '.github/workflows/read-aloud.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'פרסום לחנות אוצריא בענף main: auto (כשיש סודות) / true / false'
+        default: 'auto'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: read-aloud-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  plugin:
+    name: תוסף הקראה קולית (.otzplugin)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    env:
+      HAS_STORE_SECRETS: ${{ secrets.OTZARIA_USER != '' && secrets.OTZARIA_PASSWORD != '' }}
+      PUBLISH: ${{ inputs.publish || 'auto' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: גרסה
+        id: ver
+        run: |
+          version="$(python3 -c "import json; print(json.load(open('plugins/read-aloud/manifest.json', encoding='utf-8'))['version'])")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::גרסה לא תקינה בתוסף: '$version' (צפוי X.Y.Z)"; exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: ולידציה ואריזה
+        id: build
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugins/read-aloud
+          build: 'true'
+          publish: 'false'
+
+      - name: העלאת התוסף
+        uses: actions/upload-artifact@v7
+        with:
+          name: otzaria-read-aloud-plugin
+          path: ${{ steps.build.outputs.plugin-file }}
+          if-no-files-found: error
+
+      - name: צילומי מסך לחנות
+        id: shots
+        run: |
+          # In screenshots-read-aloud/ at the repository root (PNG/JPG, up to 10, in name order).
+          list="$(ls screenshots-read-aloud/*.png screenshots-read-aloud/*.jpg screenshots-read-aloud/*.jpeg 2>/dev/null | sort | head -n 10 | paste -sd, - || true)"
+          echo "list=$list" >>"$GITHUB_OUTPUT"
+          echo "צילומי מסך: ${list:-אין}"
+
+      - name: פרסום לחנות — דילוג
+        if: github.ref == 'refs/heads/main' && (env.HAS_STORE_SECRETS != 'true' || vars.PUBLISH_READ_ALOUD != 'true')
+        run: echo "::notice::פרסום 'הקראה קולית' לחנות דולג - נדרשים הסודות OTZARIA_USER ו-OTZARIA_PASSWORD והמשתנה PUBLISH_READ_ALOUD=true."
+
+      - name: פרסום לחנות אוצריא
+        if: github.ref == 'refs/heads/main' && env.HAS_STORE_SECRETS == 'true' && vars.PUBLISH_READ_ALOUD == 'true' && env.PUBLISH != 'false'
+        continue-on-error: true
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugins/read-aloud
+          otzaria-user: ${{ secrets.OTZARIA_USER }}
+          otzaria-password: ${{ secrets.OTZARIA_PASSWORD }}
+          publish: ${{ env.PUBLISH }}
+          screenshots: ${{ steps.shots.outputs.list }}
+          reports-consent: ${{ vars.OTZARIA_REPORTS_CONSENT == 'true' && 'true' || 'false' }}
+
+  release:
+    name: GitHub Release (תוסף)
+    needs: plugin
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      !cancelled() && needs.plugin.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: read-aloud-v${{ needs.plugin.outputs.version }}
+    steps:
+      - name: האם ה-Release כבר קיים
+        id: check
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ה-Release $TAG כבר קיים - מדלג (כדי לפרסם גרסה חדשה מעלים את version במניפסט של התוסף)."
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: הורדת קובץ התוסף
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/download-artifact@v8
+        with:
+          name: otzaria-read-aloud-plugin
+          path: files
+
+      - name: יצירת ה-Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          ls -l files
+          (cd files && sha256sum * >SHA256SUMS.txt)
+          # --latest=false: the service release stays "latest" (the plugins fetch the installer from it).
+          gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "תוסף הקראה קולית $TAG" --latest=false \
+            --notes "קובץ התוסף (.otzplugin) של הקראה קולית. מתקינים מחנות התוספים של אוצריא, או מהקובץ: כלים ← תוספים ← התקנת תוסף חדש. התוסף צריך את שירות הדיבור: https://github.com/$GITHUB_REPOSITORY/releases/latest"
