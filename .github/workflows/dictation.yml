@@ -79,7 +79,10 @@ jobs:
 
       # "next" needs an Otzaria newer than the released one (search.field_actions,
       # minAppVersion 0.9.98.1): today's validator may reject it. It is packed anyway
-      # for testing with a development build of Otzaria, and never published.
+      # for testing, and never published. A development build of Otzaria reports
+      # 0.9.98 (build 99800), so it refuses this package from a file: test it
+      # through the developer loader (otzaria --dev-plugins, which skips the version
+      # check) or with an Otzaria whose build number ends in 01 (0.9.98.1).
       - name: ולידציה (next) — מותר להיכשל
         id: next
         continue-on-error: true

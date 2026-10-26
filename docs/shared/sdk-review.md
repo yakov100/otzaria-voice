@@ -79,9 +79,11 @@ API_REFERENCE, spec.json, DESIGN_GUIDE, ICONS, COOKBOOK), וקוד אוצריא 
    שהוא מצהיר עליה (`search.setFieldText` קיימת רק מ-0.9.98.1).
 
 לכן הקוד אחד (`plugins/dictation/src`), והפקודה `python plugins/dictation/build.py` מייצרת שתי
-חבילות: `plugins/dictation/packages/released` (גרסה 2.0.0, לאוצריא 0.9.98) ו-
-`plugins/dictation/packages/next` (גרסה 2.1.0, לאוצריא 0.9.98.1 ואילך, עם המיקרופון
-בשדות). מי שמעדכן את אוצריא יקבל את 2.1.0.
+חבילות: `plugins/dictation/packages/released` (גרסה 2.2.2, לאוצריא 0.9.98) ו-
+`plugins/dictation/packages/next` (גרסה 2.3.0, לאוצריא 0.9.98.1 ואילך, עם המיקרופון
+בשדות). את 2.3.0 מפרסמים בחנות רק אחרי שברור שהחנות לא תשלח אותה לאוצריא 0.9.98:
+אוצריא 0.9.98 משווה רק שלושה חלקים של מספר הגרסה, ולכן רואה ב-0.9.98.1 את 0.9.98,
+ואז נכשלת בהתקנה על ההרשאה שהיא לא מכירה.
 
 ## מה אי אפשר — ולמה
 

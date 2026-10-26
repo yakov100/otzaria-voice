@@ -7,8 +7,8 @@ Shared by two parallel pieces of work:
   supports it and falls back gracefully when it does not.
 
 Names below are what the Otzaria PR implements (branch
-`feat/plugin-search-field-actions`, merged into `dev` as Otzaria/otzaria#2320 on
-2026-10-10; Otzaria marks these APIs as **0.9.98.1**, the next release after 0.9.98). Sections marked
+`feat/plugin-search-field-actions`, merged into `dev` as Otzaria/otzaria#2320;
+Otzaria marks these APIs as **0.9.98.1**, the next release after 0.9.98). Sections marked
 "Implemented as" record where the Otzaria side refined the original proposal.
 
 ## Manifest
