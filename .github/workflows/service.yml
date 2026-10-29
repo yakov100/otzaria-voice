@@ -383,10 +383,37 @@ jobs:
       - name: הורדת חבילת הקול ואימותה
         run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
 
-      # Both APKs are debug-signed (installable by side-loading; no release key in CI).
+      # Both APKs are signed with the project's permanent key, so a newer APK
+      # installs over an older one and the downloaded voice pack stays. The key
+      # comes from the repository secrets ANDROID_KEYSTORE_BASE64 (the PKCS12
+      # keystore, base64) and ANDROID_KEYSTORE_PASSWORD; service/android/SIGNING.md
+      # says how they were made. Without them (forks) the APKs are signed with the
+      # runner's throwaway debug key, as before, and the run warns.
+      - name: מפתח החתימה
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -o pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::אין סוד ANDROID_KEYSTORE_BASE64: ה-APK ייחתם במפתח debug חד-פעמי, ולא יותקן כעדכון על גרסה אחרת."
+            exit 0
+          fi
+          [ -n "$KEYSTORE_PASSWORD" ] || { echo "::error::יש ANDROID_KEYSTORE_BASE64 בלי ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          ks="$RUNNER_TEMP/otzaria-voice.p12"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d >"$ks"
+          # keytool prints its errors to stdout, which goes into sha256sum here.
+          cert="$(keytool -exportcert -keystore "$ks" -storetype PKCS12 -storepass:env KEYSTORE_PASSWORD -alias otzaria-voice | sha256sum | cut -d' ' -f1)" ||
+            { echo "::error::keytool לא פתח את המפתח: סיסמה שגויה, ANDROID_KEYSTORE_BASE64 פגום, או שאין בו הכינוי otzaria-voice"; exit 1; }
+          echo "OTZARIA_KEYSTORE=$ks" >>"$GITHUB_ENV"
+          echo "OTZARIA_CERT_SHA256=$cert" >>"$GITHUB_ENV"
+          echo "מפתח הפרויקט: תעודה SHA-256 $cert"
+
       # The with-models APK carries the voice pack in assets/pack/ of the "app" module.
       - name: בניית ה-APK
         working-directory: service/android
+        env:
+          OTZARIA_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -f ./gradlew ]; then chmod +x ./gradlew; g=./gradlew; else g=gradle; fi
           out="$GITHUB_WORKSPACE/out"; mkdir -p "$out"
@@ -409,6 +436,22 @@ jobs:
             unzip -l "$f" | grep -q 'lib/arm64-v8a/libonnxruntime.so' || { echo "::error::$f: no libonnxruntime.so"; exit 1; }
           done
           unzip -l "$out"/*with-models*.apk | grep -q 'assets/pack/ctc/model.int8.onnx' || { echo "::error::with-models APK has no pack"; exit 1; }
+
+      # The certificate SHA-256 goes to the log and the run summary: two runs
+      # signed with the project's key show the same value.
+      - name: בדיקת החתימה
+        run: |
+          set -o pipefail
+          bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
+          for f in out/*.apk; do
+            cert="$("$bt/apksigner" verify --print-certs "$f" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+            [ -n "$cert" ] || { echo "::error::$f: no signing certificate"; exit 1; }
+            echo "$(basename "$f"): certificate SHA-256 $cert"
+            echo "- \`$(basename "$f")\`: certificate SHA-256 \`$cert\`" >>"$GITHUB_STEP_SUMMARY"
+            if [ -n "$OTZARIA_CERT_SHA256" ] && [ "$cert" != "$OTZARIA_CERT_SHA256" ]; then
+              echo "::error::$f is not signed with the project's key ($OTZARIA_CERT_SHA256)"; exit 1
+            fi
+          done
 
       - name: העלאה — עם מודלים
         uses: actions/upload-artifact@v7

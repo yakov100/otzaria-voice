@@ -6,3 +6,8 @@ service/android/.gradle/
 service/android/app/build/
 service/android/app/.cxx/
 service/android/local.properties
+
+# Android signing keys never go into the repository (service/android/SIGNING.md)
+*.p12
+*.jks
+*.keystore
