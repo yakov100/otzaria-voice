@@ -55,12 +55,23 @@ try {
     Remove-Item Env:\OTZARIA_KEYSTORE_PASSWORD
 }
 
+# gh reads each secret from a file on its standard input, so that neither
+# value appears on a command line.
+function Set-Secret($name, $file) {
+    $p = Start-Process gh -ArgumentList 'secret', 'set', $name, '--repo', $Repo `
+        -RedirectStandardInput $file -NoNewWindow -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "gh secret set $name failed" }
+}
+
 if (-not $NoUpload) {
-    $base64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($keystore))
-    & gh secret set ANDROID_KEYSTORE_BASE64 --repo $Repo --body $base64
-    if ($LASTEXITCODE) { throw 'gh secret set ANDROID_KEYSTORE_BASE64 failed' }
-    & gh secret set ANDROID_KEYSTORE_PASSWORD --repo $Repo --body $password
-    if ($LASTEXITCODE) { throw 'gh secret set ANDROID_KEYSTORE_PASSWORD failed' }
+    $b64File = Join-Path $Dir 'keystore.b64'
+    [IO.File]::WriteAllText($b64File, [Convert]::ToBase64String([IO.File]::ReadAllBytes($keystore)))
+    try {
+        Set-Secret ANDROID_KEYSTORE_BASE64 $b64File
+        Set-Secret ANDROID_KEYSTORE_PASSWORD $passFile
+    } finally {
+        Remove-Item $b64File
+    }
 }
 
 Write-Host ''

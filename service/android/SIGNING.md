@@ -20,14 +20,29 @@ powershell -ExecutionPolicy Bypass -File service\android\new-signing-key.ps1
 
 - יוצר את התיקייה `%USERPROFILE%\otzaria-voice-signing-key`, ובה המפתח (`otzaria-voice.p12`) וסיסמה אקראית (`password.txt`). הסיסמה לא מוצגת על המסך.
 - שומר את שניהם במאגר כסודות `ANDROID_KEYSTORE_BASE64` ו-`ANDROID_KEYSTORE_PASSWORD` (בגיטהאב: Settings ← Secrets and variables ← Actions).
-- מדפיס את טביעת האצבע של התעודה (SHA-256).
 - מסרב לפעול אם כבר יש מפתח בתיקייה או סוד כזה במאגר, כדי שהמפתח לא יוחלף בטעות.
+
+מה יופיע על המסך (באנגלית):
+
+- `Generating 4,096 bit RSA key pair…`: המפתח נוצר.
+- `Key folder:` התיקייה שבה נשמר המפתח.
+- `Certificate SHA-256:` טביעת האצבע של המפתח: 64 אותיות ומספרים. היא נכתבת בשני מקומות במאגר: כאן למטה, וב-`ANDROID_CERT_SHA256` בקובץ `service.yml`.
+- `Secrets … set`: שני הסודות נשמרו בגיטהאב.
+- `Now copy the whole folder to two safe places`: הגיבוי, שמוסבר בסעיף הבא.
 
 טביעת האצבע של המפתח הקבוע: (תיכתב כאן אחרי יצירת המפתח)
 
 ## גיבוי: חשוב מאוד
 
 - העתיקו את כל התיקייה, שני הקבצים יחד, לשני מקומות בטוחים. למשל דיסק-און-קי שנשמר במגירה, וכספת סיסמאות או ענן פרטי.
+  אפשר גם להפריד: את הסיסמה לשמור בכספת סיסמאות, ואת קובץ המפתח בדיסק-און-קי.
+- **בדקו כל עותק.** ב-PowerShell, כש-`E:\otzaria-voice-signing-key` הוא העותק:
+
+  ```
+  keytool -list -keystore E:\otzaria-voice-signing-key\otzaria-voice.p12 -storetype PKCS12 -storepass:file E:\otzaria-voice-signing-key\password.txt
+  ```
+
+  בשורה `Certificate fingerprint (SHA-256)` צריכה להופיע אותה טביעה שלמעלה (שם היא מופרדת בנקודתיים).
 - **אם המפתח אובד, אי אפשר לפרסם עוד אף עדכון לאנדרואיד.** כל משתמש יצטרך להסיר ולהתקין מחדש, ולהוריד שוב את חבילת הקול.
   את הסוד בגיטהאב אי אפשר לקרוא בחזרה, ולכן הוא לא גיבוי.
 - מי שמחזיק בשני הקבצים יכול לחתום אפליקציה שתותקן כ"עדכון" על שלנו. לא לשלוח אותם לאף אחד, ולא להכניס אותם למאגר (`.gitignore` חוסם קובצי `*.p12`).
@@ -37,15 +52,19 @@ powershell -ExecutionPolicy Bypass -File service\android\new-signing-key.ps1
 למשל אם הסודות נמחקו, או במאגר חדש. ב-PowerShell, מתוך תיקיית המפתח:
 
 ```
-gh secret set ANDROID_KEYSTORE_PASSWORD --repo yakov100/otzaria-voice --body (Get-Content password.txt -Raw)
-gh secret set ANDROID_KEYSTORE_BASE64 --repo yakov100/otzaria-voice --body ([Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\otzaria-voice.p12")))
+cmd /c "gh secret set ANDROID_KEYSTORE_PASSWORD --repo yakov100/otzaria-voice < password.txt"
+[IO.File]::WriteAllText("$PWD\keystore.b64", [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\otzaria-voice.p12")))
+cmd /c "gh secret set ANDROID_KEYSTORE_BASE64 --repo yakov100/otzaria-voice < keystore.b64"
+Remove-Item keystore.b64
 ```
 
 ## בכל בנייה
 
 - בסיכום של כל ריצה ב-Actions מופיעה טביעת התעודה של כל APK. היא צריכה להיות זהה לטביעה שלמעלה.
-  אם היא שונה מהמפתח שבסודות, הבנייה נכשלת.
-- כשהסודות חסרים (למשל ב-fork), הבנייה עדיין עוברת, נחתמת במפתח חד-פעמי ומציגה אזהרה. APK כזה לא מתאים לפרסום.
+- הבנייה נכשלת אם המפתח שבסודות אינו המפתח הקבוע, ואם ב-`main` אין מפתח בסודות. כך לא יוצא שחרור שחתום במפתח אחר.
+- בענפים אחרים בלי הסודות, וב-fork, הבנייה עוברת במפתח חד-פעמי ומציגה אזהרה. APK כזה לא מתאים לפרסום.
+- כל בנייה במאגר הזה, בכל ענף, נחתמת במפתח הקבוע. לכן APK מענף ניסיוני יותקן אצל משתמש כעדכון רגיל. לפרסם רק את מה שבדף הגרסאות.
+- בבדיקה באמולטור, ה-APK עם המודלים מותקן כעדכון על זה שבלי המודלים, בלי הסרה, והקבצים של האפליקציה צריכים להישאר.
 
 ## מי שכבר התקין גרסה 2.5.1 או ישנה ממנה
 
