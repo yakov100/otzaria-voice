@@ -416,10 +416,17 @@ jobs:
           # keytool prints its errors to stdout, which goes into sha256sum here.
           cert="$(keytool -exportcert -keystore "$ks" -storetype PKCS12 -storepass:env KEYSTORE_PASSWORD -alias otzaria-voice | sha256sum | cut -d' ' -f1)" ||
             { echo "::error::keytool לא פתח את המפתח: סיסמה שגויה, ANDROID_KEYSTORE_BASE64 פגום, או שאין בו הכינוי otzaria-voice"; exit 1; }
-          if [ "$OWN_REPO" = true ] && [ -n "$ANDROID_CERT_SHA256" ] && [ "$cert" != "$ANDROID_CERT_SHA256" ]; then
-            echo "::error::המפתח שבסודות (תעודה $cert) אינו המפתח של הפרויקט ($ANDROID_CERT_SHA256). אסור להחליף אותו (SIGNING.md)."
+          # The pinned value may be pasted from keytool (upper case, colons).
+          pin="$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ': ' | tr A-F a-f)"
+          if [ "$OWN_REPO" = true ] && [ "$ON_MAIN" = true ] && [ -z "$pin" ]; then
+            echo "::error::ANDROID_CERT_SHA256 ריק: ב-main חותמים רק במפתח שהטביעה שלו כתובה בקובץ הזה (SIGNING.md)."
             exit 1
           fi
+          if [ "$OWN_REPO" = true ] && [ -n "$pin" ] && [ "$cert" != "$pin" ]; then
+            echo "::error::המפתח שבסודות (תעודה $cert) אינו המפתח של הפרויקט ($pin). אסור להחליף אותו (SIGNING.md)."
+            exit 1
+          fi
+          [ "$OWN_REPO" = true ] && [ -n "$pin" ] && echo "OTZARIA_KEY_PINNED=true" >>"$GITHUB_ENV"
           echo "OTZARIA_KEYSTORE=$ks" >>"$GITHUB_ENV"
           echo "OTZARIA_CERT_SHA256=$cert" >>"$GITHUB_ENV"
           echo "מפתח הפרויקט: תעודה SHA-256 $cert"
@@ -467,8 +474,10 @@ jobs:
               echo "::error::$f לא חתום במפתח שבסודות ($OTZARIA_CERT_SHA256)"; exit 1
             fi
           done
-          if [ -n "$OTZARIA_CERT_SHA256" ]; then
-            echo "שני ה-APK חתומים במפתח הקבוע של הפרויקט." >>"$GITHUB_STEP_SUMMARY"
+          if [ "$OTZARIA_KEY_PINNED" = true ]; then
+            echo "שני ה-APK חתומים במפתח הקבוע של הפרויקט (הטביעה שב-ANDROID_CERT_SHA256)." >>"$GITHUB_STEP_SUMMARY"
+          elif [ -n "$OTZARIA_CERT_SHA256" ]; then
+            echo "שני ה-APK חתומים במפתח שבסודות. הטביעה שלו עוד לא כתובה ב-ANDROID_CERT_SHA256." >>"$GITHUB_STEP_SUMMARY"
           else
             echo "**אזהרה:** אין מפתח בסודות, וה-APK חתומים במפתח חד-פעמי. אין לפרסם אותם." >>"$GITHUB_STEP_SUMMARY"
           fi
