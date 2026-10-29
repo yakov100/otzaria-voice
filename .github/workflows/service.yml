@@ -470,8 +470,12 @@ jobs:
             info="$("$bt/apksigner" verify --print-certs "$f" 2>&1)" ||
               { echo "$info"; echo "::error::$f: apksigner verify failed"; exit 1; }
             echo "$info"
-            cert="$(printf '%s\n' "$info" | sed -n 's/^Signer[^:]* certificate SHA-256 digest: //p' | sed -n 1p)"
+            # "Signer #1 certificate SHA-256 digest: …" or, in newer build-tools,
+            # "V2 Signer: certificate SHA-256 digest: …"; the source stamp is not a signer.
+            certs="$(printf '%s\n' "$info" | sed -n '/^Source Stamp/d; s/^.*certificate SHA-256 digest: //p' | sort -u)"
+            cert="$(printf '%s\n' "$certs" | sed -n 1p)"
             [ -n "$cert" ] || { echo "::error::$f: no signing certificate in the apksigner output"; exit 1; }
+            [ "$(printf '%s\n' "$certs" | wc -l)" -eq 1 ] || { echo "::error::$f: signed with more than one certificate"; exit 1; }
             echo "$(basename "$f"): certificate SHA-256 $cert"
             echo "- \`$(basename "$f")\`: טביעת התעודה (SHA-256) \`$cert\`" >>"$GITHUB_STEP_SUMMARY"
             if [ -n "$OTZARIA_CERT_SHA256" ] && [ "$cert" != "$OTZARIA_CERT_SHA256" ]; then
