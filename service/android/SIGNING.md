@@ -30,7 +30,11 @@ powershell -ExecutionPolicy Bypass -File service\android\new-signing-key.ps1
 - `Secrets … set`: שני הסודות נשמרו בגיטהאב.
 - `Now copy the whole folder to two safe places`: הגיבוי, שמוסבר בסעיף הבא.
 
-טביעת האצבע של המפתח הקבוע: (תיכתב כאן אחרי יצירת המפתח)
+טביעת האצבע של המפתח הקבוע (נוצר ב-30.10.2026):
+
+```
+49bf55ed7dd1fd01a0109952569c2c0c9e46bbb9ed35761d527c54ce71661ad1
+```
 
 ## גיבוי: חשוב מאוד
 

@@ -367,7 +367,7 @@ jobs:
       # The certificate SHA-256 of the project's signing key (SIGNING.md). In
       # this repository the key in the secrets must be this one, and main is
       # never built with a throwaway key: its APKs are what gets released.
-      ANDROID_CERT_SHA256: ''
+      ANDROID_CERT_SHA256: 49bf55ed7dd1fd01a0109952569c2c0c9e46bbb9ed35761d527c54ce71661ad1
       OWN_REPO: ${{ github.repository == 'yakov100/otzaria-voice' }}
       ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
     steps:
