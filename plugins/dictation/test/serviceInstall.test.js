@@ -148,6 +148,45 @@ async function test(name, fn) {
     assert.strictEqual(of(calls, 'app.openUrl').length, 0);
   });
 
+  const UPDATE_TITLE = 'עדכון לשירות הדיבור';
+  const updateAsk = (calls) => of(calls, 'ui.showConfirm').map(c => c.payload).filter(p => p.title === UPDATE_TITLE);
+
+  await test('Windows, service 2.5.0: the update is offered with the accuracy news only', async () => {
+    const calls = await press('windows', {
+      status: { service: 'otzaria-voice', version: '2.5.0', platform: 'windows', runtime: true, pack: true },
+      download: { success: true, data: { path: SAVED } }
+    });
+    const ask = updateAsk(calls);
+    assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
+    assert.ok(ask[0].content.includes('מדויקת יותר'), ask[0].content);
+    assert.ok(!ask[0].content.includes('Ctrl+Alt+M'), 'a 2.5.0 service was told the 2.5.0 news: ' + ask[0].content);
+  });
+
+  await test('Windows, service 2.2.0: the update also carries the 2.5.0 news', async () => {
+    const calls = await press('windows', {
+      status: { service: 'otzaria-voice', version: '2.2.0', platform: 'windows', runtime: true, pack: true },
+      download: { success: true, data: { path: SAVED } }
+    });
+    const ask = updateAsk(calls);
+    assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
+    assert.ok(ask[0].content.includes('מדויקת יותר') && ask[0].content.includes('Ctrl+Alt+M'), ask[0].content);
+  });
+
+  await test('the latest service: no update is offered', async () => {
+    const latest = /const LATEST_SERVICE = '([^']+)'/.exec(fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8'))[1];
+    const calls = await press('windows', {
+      status: { service: 'otzaria-voice', version: latest, platform: 'windows', runtime: true, pack: true }
+    });
+    assert.strictEqual(updateAsk(calls).length, 0, 'an update was offered to ' + latest);
+  });
+
+  await test('LATEST_SERVICE in the plugin equals kVersion in the service', () => {
+    const latest = /const LATEST_SERVICE = '([^']+)'/.exec(fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8'))[1];
+    const kVersion = /const char\* kVersion = "([^"]+)"/.exec(
+      fs.readFileSync(path.join(repo, 'service', 'src', 'common', 'service.cpp'), 'utf8'))[1];
+    assert.strictEqual(latest, kVersion);
+  });
+
   await test('the manifest lets Otzaria download the installer, every hop of it', () => {
     const m = JSON.parse(fs.readFileSync(path.join(root, 'manifest.base.json'), 'utf8'));
     assert.ok(m.permissions.includes('network.access'), 'network.access is missing');
