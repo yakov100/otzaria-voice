@@ -1071,7 +1071,7 @@ void postQuit() {
   closeSocket(s);
 }
 
-// --eval <manifest.jsonl> <out.jsonl>: offline (beam 16) and live-simulated
+// --eval <manifest.jsonl> <out.jsonl>: offline (voice::kFinalBeam) and live-simulated
 // transcripts for each recording, for tool/voice_eval/metrics.py.
 int evaluate(const platform::Path& manifest, const platform::Path& outPath) {
   Engine& e = loadEngine();
@@ -1094,7 +1094,7 @@ int evaluate(const platform::Path& manifest, const platform::Path& outPath) {
     std::string offline;
     if (r.frames) {
       std::vector<std::string> words;
-      for (auto& w : util::split(e.decoder->decode(r, 16, {}, {}), ' '))
+      for (auto& w : util::split(e.decoder->decode(r, voice::kFinalBeam, {}, {}), ' '))
         if (!w.empty()) words.push_back(std::move(w));
       if (e.rescorer) words = e.rescorer->rescore(r, std::move(words));
       std::string text;

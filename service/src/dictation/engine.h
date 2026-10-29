@@ -17,6 +17,12 @@
 
 namespace voice {
 
+// Beam width of the final decode of a segment, in both paths (live and --eval);
+// drafts use 8. 48 since 29.10.2026: on dev3 (the developer's voice, 51 clips)
+// 16 -> 48 gave 2.44 fewer word errors per 100 offline and 3.76 live, both
+// confidence intervals below 0, for about 12 ms more per second of speech.
+constexpr int kFinalBeam = 48;
+
 struct OrtState;
 struct MappedLm;
 using Path = std::filesystem::path;

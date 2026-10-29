@@ -1231,7 +1231,7 @@ void LiveTranscriber::endSegment(std::vector<LiveUpdate>& out) {
   t.closing = std::chrono::steady_clock::now();
   if (speechSec_ >= kMinSpeechSec) {
     CtcOutput r;
-    const auto finalWords = recognize(16, &r);
+    const auto finalWords = recognize(kFinalBeam, &r);
     // With a second pass, it gets the final decode of the whole segment (the
     // final update may revise committed words). Without one, the final decode
     // only completes what follows the committed words. Joining like that loses
