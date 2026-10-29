@@ -465,9 +465,13 @@ jobs:
         run: |
           set -o pipefail
           bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
+          echo "apksigner: $bt/apksigner"
           for f in out/*.apk; do
-            cert="$("$bt/apksigner" verify --print-certs "$f" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
-            [ -n "$cert" ] || { echo "::error::$f: no signing certificate"; exit 1; }
+            info="$("$bt/apksigner" verify --print-certs "$f" 2>&1)" ||
+              { echo "$info"; echo "::error::$f: apksigner verify failed"; exit 1; }
+            echo "$info"
+            cert="$(printf '%s\n' "$info" | sed -n 's/^Signer[^:]* certificate SHA-256 digest: //p' | sed -n 1p)"
+            [ -n "$cert" ] || { echo "::error::$f: no signing certificate in the apksigner output"; exit 1; }
             echo "$(basename "$f"): certificate SHA-256 $cert"
             echo "- \`$(basename "$f")\`: טביעת התעודה (SHA-256) \`$cert\`" >>"$GITHUB_STEP_SUMMARY"
             if [ -n "$OTZARIA_CERT_SHA256" ] && [ "$cert" != "$OTZARIA_CERT_SHA256" ]; then
