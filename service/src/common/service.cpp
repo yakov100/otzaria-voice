@@ -52,7 +52,7 @@
 
 namespace service {
 
-const char* kVersion = "2.5.0";
+const char* kVersion = "2.5.1";
 
 namespace {
 

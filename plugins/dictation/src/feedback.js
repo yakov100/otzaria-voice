@@ -13,7 +13,7 @@ const WINDOWS_INSTALLER =
   'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
 // The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). The
 // store updates the plugin but not the service, so an older one is offered the download page.
-const LATEST_SERVICE = '2.5.0';
+const LATEST_SERVICE = '2.5.1';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {
@@ -243,12 +243,17 @@ async function offerServiceUpdate(st) {
   } catch (_) {}
   const platform = st.platform || platformName;
   const windows = platform === 'windows';
+  // A service older than 2.5.0 also gets the 2.5.0 news (speed, and the end of typing into other programs).
+  const before250 = versionOlder(st.version, '2.5.0');
   const ok = await ask(
     'עדכון לשירות הדיבור',
-    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מהירה יותר: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
-      'שימו לב: בגרסה הזו הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n' +
+    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מדויקת יותר: בבדיקות שלנו (על הקלטות של דובר אחד) היא טועה בכ-18% פחות מילים.\n' +
+      (before250
+        ? 'היא גם מהירה יותר מהגרסה שמותקנת אצלך: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
+          'שימו לב: הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n'
+        : '') +
       (windows
-        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון אוצריא תוריד את תוכנת ההתקנה החדשה (כ-2.5 מגה-בייט) לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
+        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (כ-2.5 מגה-בייט) לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
         : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
       'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
       (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
