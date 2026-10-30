@@ -54,6 +54,9 @@ if(ANDROID)
   target_link_libraries(otzaria_voice PRIVATE log android)
   # Small and quick to load; nothing outside the JNI entry points is exported.
   set_target_properties(otzaria_voice PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  # CI ships Gradle's debug build (assembleDebug), whose CMAKE_BUILD_TYPE=Debug
+  # compiles at -O0; the later -O2 wins, as on the desktop.
+  target_compile_options(otzaria_voice PRIVATE -O2)
   target_link_options(otzaria_voice PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16384)
   return()
 endif()
