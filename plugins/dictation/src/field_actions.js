@@ -38,7 +38,7 @@ async function drainWrites(fs) {
       if (next === fs.sent || fs.full) continue;
       if (next.length > FIELD_TEXT_MAX) {
         fs.full = true;
-        say('שדה החיפוש מקבל עד 1,000 תווים, ולכן ההכתבה נעצרה. מה שנכתב עד כאן נשאר בשדה.');
+        say('אפשר להכתיב לשדה החיפוש עד 1,000 תווים, ולכן ההכתבה נעצרה. מה שנכתב עד כאן נשאר בשדה.');
         cancelDictation();
         continue;
       }
