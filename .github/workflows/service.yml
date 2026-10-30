@@ -364,6 +364,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.detect.outputs.version }}
+      # The certificate SHA-256 of the project's signing key (SIGNING.md). In
+      # this repository the key in the secrets must be this one, and main is
+      # never built with a throwaway key: its APKs are what gets released.
+      ANDROID_CERT_SHA256: 49bf55ed7dd1fd01a0109952569c2c0c9e46bbb9ed35761d527c54ce71661ad1
+      OWN_REPO: ${{ github.repository == 'yakov100/otzaria-voice' }}
+      ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -383,10 +389,53 @@ jobs:
       - name: הורדת חבילת הקול ואימותה
         run: bash installer/fetch-pack.sh .cache/voice-pack dist/pack
 
-      # Both APKs are debug-signed (installable by side-loading; no release key in CI).
+      # Both APKs are signed with the project's permanent key, so a newer APK
+      # installs over an older one and the downloaded voice pack stays. The key
+      # comes from the repository secrets ANDROID_KEYSTORE_BASE64 (the PKCS12
+      # keystore, base64) and ANDROID_KEYSTORE_PASSWORD; service/android/SIGNING.md
+      # says how they were made. Without them (forks, other branches before the
+      # key existed) the APKs are signed with the runner's throwaway debug key,
+      # as before, and the run warns; on main of this repository it fails.
+      - name: מפתח החתימה
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -o pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            if [ "$OWN_REPO" = true ] && [ "$ON_MAIN" = true ]; then
+              echo "::error::אין סוד ANDROID_KEYSTORE_BASE64: ב-main לא בונים APK במפתח חד-פעמי, כי ממנו יוצא השחרור (service/android/SIGNING.md)."
+              exit 1
+            fi
+            echo "::warning::אין סוד ANDROID_KEYSTORE_BASE64: ה-APK ייחתם במפתח debug חד-פעמי, ולא יותקן כעדכון על גרסה אחרת."
+            exit 0
+          fi
+          [ -n "$KEYSTORE_PASSWORD" ] || { echo "::error::יש ANDROID_KEYSTORE_BASE64 בלי ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          ks="$RUNNER_TEMP/otzaria-voice.p12"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d >"$ks"
+          # keytool prints its errors to stdout, which goes into sha256sum here.
+          cert="$(keytool -exportcert -keystore "$ks" -storetype PKCS12 -storepass:env KEYSTORE_PASSWORD -alias otzaria-voice | sha256sum | cut -d' ' -f1)" ||
+            { echo "::error::keytool לא פתח את המפתח: סיסמה שגויה, ANDROID_KEYSTORE_BASE64 פגום, או שאין בו הכינוי otzaria-voice"; exit 1; }
+          # The pinned value may be pasted from keytool (upper case, colons).
+          pin="$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ': ' | tr A-F a-f)"
+          if [ "$OWN_REPO" = true ] && [ "$ON_MAIN" = true ] && [ -z "$pin" ]; then
+            echo "::error::ANDROID_CERT_SHA256 ריק: ב-main חותמים רק במפתח שהטביעה שלו כתובה בקובץ הזה (SIGNING.md)."
+            exit 1
+          fi
+          if [ "$OWN_REPO" = true ] && [ -n "$pin" ] && [ "$cert" != "$pin" ]; then
+            echo "::error::המפתח שבסודות (תעודה $cert) אינו המפתח של הפרויקט ($pin). אסור להחליף אותו (SIGNING.md)."
+            exit 1
+          fi
+          [ "$OWN_REPO" = true ] && [ -n "$pin" ] && echo "OTZARIA_KEY_PINNED=true" >>"$GITHUB_ENV"
+          echo "OTZARIA_KEYSTORE=$ks" >>"$GITHUB_ENV"
+          echo "OTZARIA_CERT_SHA256=$cert" >>"$GITHUB_ENV"
+          echo "מפתח הפרויקט: תעודה SHA-256 $cert"
+
       # The with-models APK carries the voice pack in assets/pack/ of the "app" module.
       - name: בניית ה-APK
         working-directory: service/android
+        env:
+          OTZARIA_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -f ./gradlew ]; then chmod +x ./gradlew; g=./gradlew; else g=gradle; fi
           out="$GITHUB_WORKSPACE/out"; mkdir -p "$out"
@@ -409,6 +458,37 @@ jobs:
             unzip -l "$f" | grep -q 'lib/arm64-v8a/libonnxruntime.so' || { echo "::error::$f: no libonnxruntime.so"; exit 1; }
           done
           unzip -l "$out"/*with-models*.apk | grep -q 'assets/pack/ctc/model.int8.onnx' || { echo "::error::with-models APK has no pack"; exit 1; }
+
+      # The certificate SHA-256 goes to the log and the run summary: two runs
+      # signed with the project's key show the same value.
+      - name: בדיקת החתימה
+        run: |
+          set -o pipefail
+          bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
+          echo "apksigner: $bt/apksigner"
+          for f in out/*.apk; do
+            info="$("$bt/apksigner" verify --print-certs "$f" 2>&1)" ||
+              { echo "$info"; echo "::error::$f: apksigner verify failed"; exit 1; }
+            echo "$info"
+            # "Signer #1 certificate SHA-256 digest: …" or, in newer build-tools,
+            # "V2 Signer: certificate SHA-256 digest: …"; the source stamp is not a signer.
+            certs="$(printf '%s\n' "$info" | sed -n '/^Source Stamp/d; s/^.*certificate SHA-256 digest: //p' | sort -u)"
+            cert="$(printf '%s\n' "$certs" | sed -n 1p)"
+            [ -n "$cert" ] || { echo "::error::$f: no signing certificate in the apksigner output"; exit 1; }
+            [ "$(printf '%s\n' "$certs" | wc -l)" -eq 1 ] || { echo "::error::$f: signed with more than one certificate"; exit 1; }
+            echo "$(basename "$f"): certificate SHA-256 $cert"
+            echo "- \`$(basename "$f")\`: טביעת התעודה (SHA-256) \`$cert\`" >>"$GITHUB_STEP_SUMMARY"
+            if [ -n "$OTZARIA_CERT_SHA256" ] && [ "$cert" != "$OTZARIA_CERT_SHA256" ]; then
+              echo "::error::$f לא חתום במפתח שבסודות ($OTZARIA_CERT_SHA256)"; exit 1
+            fi
+          done
+          if [ "$OTZARIA_KEY_PINNED" = true ]; then
+            echo "שני ה-APK חתומים במפתח הקבוע של הפרויקט (הטביעה שב-ANDROID_CERT_SHA256)." >>"$GITHUB_STEP_SUMMARY"
+          elif [ -n "$OTZARIA_CERT_SHA256" ]; then
+            echo "שני ה-APK חתומים במפתח שבסודות. הטביעה שלו עוד לא כתובה ב-ANDROID_CERT_SHA256." >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "**אזהרה:** אין מפתח בסודות, וה-APK חתומים במפתח חד-פעמי. אין לפרסם אותם." >>"$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: העלאה — עם מודלים
         uses: actions/upload-artifact@v7
@@ -436,12 +516,18 @@ jobs:
         with:
           name: otzaria-voice-android-with-models
           path: apk
+      - uses: actions/download-artifact@v8
+        with:
+          name: otzaria-voice-android-without-models
+          path: apk-old
       - name: הפעלת KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: התקנה והכתבה באמולטור
+      # First an update: the with-models APK over the without-models one, keeping
+      # the app's files. Then the dictation check on the updated app.
+      - name: עדכון, התקנה והכתבה באמולטור
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -450,7 +536,9 @@ jobs:
           disk-size: 6G
           ram-size: 4096M
           emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none
-          script: bash installer/ci/android-smoke.sh "$(ls apk/*.apk)"
+          script: |
+            bash installer/ci/android-update.sh "$(ls apk-old/*.apk)" "$(ls apk/*.apk)"
+            bash installer/ci/android-smoke.sh "$(ls apk/*.apk)"
 
   release:
     name: GitHub Release (שירות)
@@ -505,6 +593,8 @@ jobs:
           | Linux | \`.deb\` (אובונטו/דביאן) או \`.tar.gz\` (כל הפצה) |
           | macOS (Apple silicon) | \`.pkg\` — בפעם הראשונה: קליק ימני ← פתיחה |
           | Android | \`.apk\` |
+
+          **אנדרואיד:** מי שהתקין את האפליקציה בגרסה 2.5.1 או ישנה ממנה צריך להסיר אותה פעם אחת לפני ההתקנה, וחבילת הקול תרד שוב. גרסאות חדשות יותר מותקנות זו על זו בלי הסרה.
 
           הוראות מלאות: https://github.com/$GITHUB_REPOSITORY#readme
 
