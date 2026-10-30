@@ -11,7 +11,12 @@
 // (plugins/dictation/build.py); users of Otzaria 0.9.98 keep plugin 2.2.x.
 
 const FIELD_ACTION_ID = 'dictate';
-let fieldSession = null; // { sessionId, sent, pending, writing }
+// Otzaria refuses search.setFieldText with a longer text (the contract;
+// PluginSearchFieldSessionService.maxTextLength). The plugin always sends its
+// whole text, so a longer dictation cannot be written in parts: it stops there,
+// the user is told, and the field keeps the last text that fit.
+const FIELD_TEXT_MAX = 1000;
+let fieldSession = null; // { sessionId, sent, pending, writing, full }
 
 function fieldCall(method, payload) {
   return Otzaria.call(method, payload).then((res) => res || { success: false });
@@ -30,7 +35,13 @@ async function drainWrites(fs) {
     while (fs.pending !== null && fieldSession === fs) {
       const next = fs.pending;
       fs.pending = null;
-      if (next === fs.sent) continue;
+      if (next === fs.sent || fs.full) continue;
+      if (next.length > FIELD_TEXT_MAX) {
+        fs.full = true;
+        say('שדה החיפוש מקבל עד 1,000 תווים, ולכן ההכתבה נעצרה. מה שנכתב עד כאן נשאר בשדה.');
+        cancelDictation();
+        continue;
+      }
       const res = await fieldCall('search.setFieldText', { sessionId: fs.sessionId, text: next });
       if (res.success) {
         fs.sent = next;
@@ -40,6 +51,8 @@ async function drainWrites(fs) {
           fieldSession = null;
           cancelDictation();
         }
+      } else {
+        console.warn('voice-search: the field refused the text', JSON.stringify(res.error));
       }
     }
   } finally {
@@ -51,7 +64,7 @@ async function onFieldActionInvoked(ev) {
   if (!ev || ev.actionId !== FIELD_ACTION_ID) return;
   // A click in another field replaces the session there (the host ends it).
   if (isDictating()) cancelDictation();
-  const fs = { sessionId: ev.sessionId, sent: '', pending: null, writing: null };
+  const fs = { sessionId: ev.sessionId, sent: '', pending: null, writing: null, full: false };
   fieldSession = fs;
   const end = () => fieldCall('search.endFieldSession', { sessionId: fs.sessionId, submit: false });
   await fieldCall('search.setFieldActionState', {

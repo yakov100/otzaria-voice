@@ -224,6 +224,11 @@ struct Engine {
 
 std::mutex engineMu;
 std::unique_ptr<Engine> engine;
+// Set by a /dictate that cancels the dictation in progress, which may belong to
+// the other plugin (the search fields and the Word editor share the service).
+// Only the log tells it apart: the old stream still ends as "cancelled", which
+// every published plugin already handles.
+std::atomic<bool> replacing{false};
 std::chrono::steady_clock::time_point lastUse = std::chrono::steady_clock::now();
 
 Engine& loadEngine() {
@@ -273,11 +278,18 @@ Engine& loadEngine() {
 // ---------------------------------------------------------------- dictation
 
 void dictate(Socket s, const Request& req) {
-  if (active) cancelRequested = true;  // a new dictation replaces a stale one
+  if (active) {
+    // A new dictation replaces a stale one. When the client already cancelled
+    // its own (the search plugin does, before a dictation in another field),
+    // that is a cancel, not a takeover: no plugin cancels the other one's.
+    if (!cancelRequested) replacing = true;
+    cancelRequested = true;
+  }
   std::lock_guard<std::mutex> session(sessionMu);
   active = true;
   stopRequested = false;
   cancelRequested = false;
+  replacing = false;
   struct Done {
     ~Done() {
       active = false;
@@ -319,10 +331,16 @@ void dictate(Socket s, const Request& req) {
       return;
     }
   }
+  // The two plugins ask for different automatic ends (search: 1500 / 8000;
+  // the Word editor: 0 / 30000), so this line tells their dictations apart.
+  platform::log("dictation request: end after silence " + std::to_string(autoEnd.afterSilence.count()) +
+                " ms, no speech " + std::to_string(autoEnd.noSpeech.count()) + " ms, hotwords " +
+                std::to_string(hotwords.size()) + ", context words " + std::to_string(context.size()));
   // The microphone opens first, so nothing said while the model loads is lost.
   Microphone mic;
   std::string micError;
   if (!mic.open(micError)) {
+    platform::log("dictation: the microphone did not open: " + micError);
     respond(s, 503, errorBody("microphone", micError));
     return;
   }
@@ -921,7 +939,9 @@ std::string recognizeLive(Microphone& mic, const std::set<std::string>& hotwords
   std::string reason = "stopped";
   while (true) {
     if (cancelRequested) {
-      summary("cancelled");
+      // The open segment gets no final decode: what the client shows of it
+      // stays a draft. The log says whether a new dictation took over.
+      summary(replacing ? "cancelled (replaced by a new dictation)" : "cancelled");
       return "cancelled";
     }
     if (stopRequested) break;
