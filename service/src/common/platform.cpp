@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <tlhelp32.h>
 #include <fstream>
 #include <sstream>
 #include "json.h"
@@ -175,6 +176,32 @@ std::wstring regString(HKEY key, const wchar_t* sub, const wchar_t* name) {
   if (RegGetValueW(key, sub, name, RRF_RT_REG_SZ, nullptr, buf, &size) != ERROR_SUCCESS) return L"";
   return buf;
 }
+
+// The folders of the otzaria.exe processes running in this session.
+std::vector<std::wstring> runningOtzariaDirs() {
+  std::vector<std::wstring> dirs;
+  DWORD session = 0;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return dirs;
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return dirs;
+  PROCESSENTRY32W pe{};
+  pe.dwSize = sizeof pe;
+  for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+    DWORD s = 0;
+    if (_wcsicmp(pe.szExeFile, L"otzaria.exe") != 0 || !ProcessIdToSessionId(pe.th32ProcessID, &s) ||
+        s != session)
+      continue;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+    if (!h) continue;
+    wchar_t buf[MAX_PATH * 2];
+    DWORD n = MAX_PATH * 2;
+    if (QueryFullProcessImageNameW(h, 0, buf, &n))
+      dirs.push_back(Path(std::wstring(buf, n)).parent_path().wstring());
+    CloseHandle(h);
+  }
+  CloseHandle(snap);
+  return dirs;
+}
 }  // namespace
 
 // Otzaria's own installation already carries ONNX Runtime (for its semantic
@@ -221,11 +248,18 @@ Path findOnnxRuntime() {
   }
   dirs.push_back(fromUtf8(env("LOCALAPPDATA")).wstring() + L"\\Programs\\Otzaria");
   dirs.push_back(fromUtf8(env("ProgramFiles")).wstring() + L"\\Otzaria");
-  for (auto d : dirs) {
+  auto inDir = [](std::wstring d) {
     while (!d.empty() && d.back() == L'\\') d.pop_back();
     auto p = d + L"\\onnxruntime\\onnxruntime.dll";
-    if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return Path(p);
-  }
+    return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES ? Path(p) : Path();
+  };
+  for (const auto& d : dirs)
+    if (auto p = inDir(d); !p.empty()) return p;
+  // Last, since it lists every process: a portable Otzaria leaves nothing in
+  // the registry or in %APPDATA%, but dictation and read-aloud are asked for
+  // only while it runs.
+  for (const auto& d : runningOtzariaDirs())
+    if (auto p = inDir(d); !p.empty()) return p;
   return Path();
 }
 
