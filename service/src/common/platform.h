@@ -36,7 +36,8 @@ void setAndroidDirs(const Path& filesDir, const Path& nativeLibDir);
 void log(const std::string& line);
 
 // ONNX Runtime's shared library: OTZARIA_ORT_PATH, next to the program, or in
-// Otzaria's own installation. Empty when none is found.
+// Otzaria's own installation (on Windows also next to the exe recorded in
+// otzaria_capabilities.json). Empty when none is found.
 Path findOnnxRuntime();
 
 class DynamicLibrary {
