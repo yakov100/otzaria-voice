@@ -498,6 +498,25 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\old" | Out-Null
           Copy-Item "$env:LOCALAPPDATA\Programs\OtzariaVoice\otzaria-voice.exe" "$env:RUNNER_TEMP\old\"
 
+      # Before 2.5.1's runs: this installer brings the voice pack, which both
+      # builds read from %APPDATA%; 2.5.1's exe was copied aside above.
+      - name: התקנה (with-models) של הבנייה הזו
+        shell: pwsh
+        run: |
+          $setup = Get-Item "setup\otzaria-voice-windows-x64-with-models-$env:VERSION.exe"
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install.log" -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(600000)) { Write-Error 'setup did not finish'; exit 1 }
+          Get-Content install.log -Tail 15
+          if ($p.ExitCode -ne 0) { Write-Error "setup exited $($p.ExitCode)"; exit 1 }
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          foreach ($f in 'otzaria-voice.exe', 'otzaria-voice-arm64.exe') {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "$f not installed"; exit 1 }
+          }
+          $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice).OtzariaVoice
+          if ($run -ne "`"$dir\otzaria-voice.exe`"") { Write-Error "login start is $run"; exit 1 }
+          Write-Host "installed both builds; login start = $run"
+
       - name: 2.5.1 (x64 בלבד) לא טוען את ה-ORT של ARM64 (שחזור התקלה)
         shell: bash
         run: |
@@ -519,23 +538,6 @@ jobs:
           grep -q 'cannot load .*Otzaria.*onnxruntime\.dll' old.out ||
             { echo "::error::2.5.1 failed, but not with cannot load ...Otzaria\\onnxruntime\\onnxruntime.dll"; exit 1; }
           echo "reproduced: x64 2.5.1 cannot load Otzaria's ARM64 ONNX Runtime"
-
-      - name: התקנה (with-models) של הבנייה הזו
-        shell: pwsh
-        run: |
-          $setup = Get-Item "setup\otzaria-voice-windows-x64-with-models-$env:VERSION.exe"
-          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install.log" -PassThru
-          $null = $p.Handle
-          if (-not $p.WaitForExit(600000)) { Write-Error 'setup did not finish'; exit 1 }
-          Get-Content install.log -Tail 15
-          if ($p.ExitCode -ne 0) { Write-Error "setup exited $($p.ExitCode)"; exit 1 }
-          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
-          foreach ($f in 'otzaria-voice.exe', 'otzaria-voice-arm64.exe') {
-            if (-not (Test-Path "$dir\$f")) { Write-Error "$f not installed"; exit 1 }
-          }
-          $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice).OtzariaVoice
-          if ($run -ne "`"$dir\otzaria-voice.exe`"") { Write-Error "login start is $run"; exit 1 }
-          Write-Host "installed both builds; login start = $run"
 
       - name: אוצריא ARM64 — הגרסה ל-ARM64 עונה, גם להכתבה וגם ל-eval
         shell: bash
