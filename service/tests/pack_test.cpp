@@ -91,7 +91,8 @@ int main() {
   SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
 
   // The bug shows only where the name is lost in the ANSI code page; a machine
-  // where it survives would pass without testing anything.
+  // where it survives would pass without testing anything, so the test fails
+  // there on purpose (also with "Unicode UTF-8 for worldwide language support").
   const std::wstring name = L"חבילה-Ж";  // חבילה-Ж
   BOOL lost = FALSE;
   const int converted = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, name.c_str(), int(name.size()),
@@ -123,11 +124,15 @@ int main() {
     CHECK(read(base / "pack.new" / "d" / "b.txt") == "bet\n");
   }
 
-  // A damaged zip still fails with the message the plugin shows.
+  // A damaged zip still fails with the message the plugin shows, and the log
+  // says what tar was given.
   {
     const fs::path base = dir / (name + L"-bad");
     const std::string error = unpack(base, kZip, 40);
     CHECK(error.rfind("פתיחת החבילה נכשלה (", 0) == 0);
+    const std::string log = read(dir / "OtzariaVoice" / "service.log");
+    CHECK(log.find("pack: tar exit ") != std::string::npos);
+    CHECK(log.find("-xf \"..\\download\\voice-pack-v4.zip.part\"") != std::string::npos);
   }
 
   fs::remove_all(dir, ec);

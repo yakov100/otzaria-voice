@@ -181,7 +181,8 @@ void extract(const Path& zip, const Path& to) {
   CloseHandle(pi.hProcess);
   if (code != 0) {
     platform::log("pack: tar exit " + std::to_string(code) + " (ANSI code page " +
-                  std::to_string(GetACP()) + ") in " + util::narrow(dir.wstring()) + ": " +
+                  std::to_string(GetACP()) + ")" +
+                  (ascii ? " in " + util::narrow(dir.wstring()) : std::string()) + ": " +
                   util::narrow(cmd));
     throw std::runtime_error("פתיחת החבילה נכשלה (" + std::to_string(code) + ")");
   }
