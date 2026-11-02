@@ -132,6 +132,7 @@ int main() {
     CHECK(error.rfind("פתיחת החבילה נכשלה (", 0) == 0);
     const std::string log = read(dir / "OtzariaVoice" / "service.log");
     CHECK(log.find("pack: tar exit ") != std::string::npos);
+    CHECK(log.find("(ANSI code page " + std::to_string(GetACP()) + ") in ") != std::string::npos);
     CHECK(log.find("-xf \"..\\download\\voice-pack-v4.zip.part\"") != std::string::npos);
   }
 

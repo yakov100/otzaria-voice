@@ -85,7 +85,7 @@ jobs:
           # service/build.cmd: CMake + Visual Studio, result in service\out\otzaria-voice.exe.
           cmd /c service\build.cmd
           if ($LASTEXITCODE) { exit 1 }
-          ctest --test-dir service/out/build -C Release --output-on-failure
+          ctest --test-dir service/out/build -C Release --output-on-failure -V
           if ($LASTEXITCODE) { exit 1 }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item service/out/otzaria-voice.exe dist/otzaria-voice.exe
@@ -376,7 +376,7 @@ jobs:
         run: |
           cmd /c service\build.cmd
           if ($LASTEXITCODE) { exit 1 }
-          ctest --test-dir service/out/build-arm64 -C Release --output-on-failure
+          ctest --test-dir service/out/build-arm64 -C Release --output-on-failure -V
           if ($LASTEXITCODE) { exit 1 }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item service/out/otzaria-voice-arm64.exe dist/
