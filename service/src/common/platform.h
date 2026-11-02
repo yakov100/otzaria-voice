@@ -41,6 +41,10 @@ void log(const std::string& line);
 // is how a portable Otzaria is found). Empty when none is found.
 Path findOnnxRuntime();
 
+// Windows: called when a library cannot load because it is built for another
+// processor (error 193); a non-empty result becomes the error message.
+void onOtherProcessor(std::string (*handler)(const Path& library));
+
 class DynamicLibrary {
  public:
   explicit DynamicLibrary(const Path& path);  // throws std::runtime_error

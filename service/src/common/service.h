@@ -27,6 +27,13 @@ void requestQuit();
 // Asks a running copy on this port to quit (used before replacing it).
 void postQuit();
 
+// Windows: a copy already serves on this port (its one-instance mutex exists).
+bool running();
+
+// Windows on ARM (handoff.h): the other build was tried at start and did not
+// take over. A library for the other processor is then reported, not switched to.
+void handoffFailed();
+
 // --eval <manifest.jsonl> <out.jsonl>: offline and live-simulated transcripts.
 int evaluate(const platform::Path& manifest, const platform::Path& out);
 

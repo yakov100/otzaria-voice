@@ -69,7 +69,7 @@ jobs:
 
   windows:
     name: Windows x64
-    needs: detect
+    needs: [detect, windows-arm64-build]
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.detect.outputs.version }}
@@ -85,9 +85,17 @@ jobs:
           # service/build.cmd: CMake + Visual Studio, result in service\out\otzaria-voice.exe.
           cmd /c service\build.cmd
           if ($LASTEXITCODE) { exit 1 }
+          ctest --test-dir service/out/build -C Release --output-on-failure
+          if ($LASTEXITCODE) { exit 1 }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item service/out/otzaria-voice.exe dist/otzaria-voice.exe
           Get-Item dist/otzaria-voice.exe | Format-List Name, Length
+
+      # Windows on ARM: the ARM64 build rides in the same installers (handoff.h).
+      - uses: actions/download-artifact@v8
+        with:
+          name: otzaria-voice-windows-arm64-exe
+          path: dist
 
       # Only for the smoke test: on users' machines the service uses Otzaria's copy.
       - name: ONNX Runtime (לבדיקה בלבד)
@@ -120,7 +128,8 @@ jobs:
       - name: בניית המתקינים
         shell: pwsh
         run: |
-          $common = @("/DAppVersion=$env:VERSION", "/DSourceExe=$pwd\dist\otzaria-voice.exe", "/O$pwd\out")
+          $common = @("/DAppVersion=$env:VERSION", "/DSourceExe=$pwd\dist\otzaria-voice.exe",
+                      "/DSourceExeArm64=$pwd\dist\otzaria-voice-arm64.exe", "/O$pwd\out")
           & $env:ISCC /Qp @common installer\windows\otzaria-voice.iss
           if ($LASTEXITCODE) { exit 1 }
           & $env:ISCC /Qp @common "/DPackDir=$pwd\dist\pack" installer\windows\otzaria-voice.iss
@@ -150,6 +159,7 @@ jobs:
             Get-Content "install-$variant.log" -Tail 15
             if ($code -ne 0) { Get-Content "install-$variant.log"; Write-Error "$variant setup exited $code"; exit 1 }
             if (-not (Test-Path "$dir\otzaria-voice.exe")) { Write-Error "$variant`: exe not installed"; exit 1 }
+            if (Test-Path "$dir\otzaria-voice-arm64.exe") { Write-Error "$variant`: the ARM64 build was installed on x64"; exit 1 }
             $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice -ErrorAction SilentlyContinue
             if (-not $run) { Write-Error "$variant`: login start not registered"; exit 1 }
             if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice')) { Write-Error "$variant`: no Installed-apps entry"; exit 1 }
@@ -166,7 +176,7 @@ jobs:
       - name: הכתבה דרך השירות המותקן
         shell: bash
         timeout-minutes: 10
-        run: bash installer/ci/smoke-test.sh "$LOCALAPPDATA/Programs/OtzariaVoice/otzaria-voice.exe"
+        run: EXPECT_ARCH=x64 bash installer/ci/smoke-test.sh "$LOCALAPPDATA/Programs/OtzariaVoice/otzaria-voice.exe"
 
       - name: בדיקת הסרה
         shell: pwsh
@@ -193,6 +203,433 @@ jobs:
           name: otzaria-voice-windows-x64-without-models
           path: out/otzaria-voice-windows-x64-without-models*.exe
           if-no-files-found: error
+
+  # Otzaria no longer installs the Visual C++ runtime into Windows: its copies
+  # lie next to otzaria.exe, one folder above onnxruntime\. On a machine where
+  # nothing else installed it, 2.5.1 failed with "cannot load
+  # ...\Otzaria\onnxruntime\onnxruntime.dll". This job makes such a machine
+  # (Otzaria's layout, the runtime hidden from System32 and from PATH): the
+  # released 2.5.1 must fail there, and this build must dictate.
+  windows-no-vcredist:
+    name: Windows x64 — בלי Visual C++ במערכת
+    needs: [detect, windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: otzaria-voice-windows-x64-with-models
+          path: setup
+
+      - name: ONNX Runtime ו-Visual C++ בפריסה של אוצריא
+        shell: bash
+        run: |
+          d="$(bash installer/fetch-ort.sh win-x64 "$RUNNER_TEMP/ort")"
+          otz="$(cygpath -u "$LOCALAPPDATA")/Programs/Otzaria"
+          mkdir -p "$otz/onnxruntime"
+          cp "$d/lib/onnxruntime.dll" "$otz/onnxruntime/"
+          for f in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
+            cp "/c/Windows/System32/$f" "$otz/$f"
+          done
+          ls -l "$otz" "$otz/onnxruntime"
+
+      - name: התקנת 2.5.1 (מהשחרור) ואחריה הבנייה הזו
+        shell: pwsh
+        run: |
+          function Invoke-Wait($file, $argList) {
+            $p = Start-Process $file -ArgumentList $argList -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit(600000)) { Write-Error "$file did not finish in 10 minutes"; exit 1 }
+            return $p.ExitCode
+          }
+          $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          gh release download service-v2.5.1 --repo $env:GITHUB_REPOSITORY --pattern 'otzaria-voice-windows-x64-without-models-2.5.1.exe' --dir old
+          if ($LASTEXITCODE) { exit 1 }
+          $code = Invoke-Wait (Get-Item old\*.exe).FullName $silent
+          if ($code -ne 0) { Write-Error "2.5.1 setup exited $code"; exit 1 }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\old" | Out-Null
+          Copy-Item "$dir\otzaria-voice.exe" "$env:RUNNER_TEMP\old\otzaria-voice.exe"
+          $setup = Get-Item "setup\otzaria-voice-windows-x64-with-models-$env:VERSION.exe"
+          $code = Invoke-Wait $setup.FullName $silent
+          if ($code -ne 0) { Write-Error "setup exited $code"; exit 1 }
+          Get-FileHash "$env:RUNNER_TEMP\old\otzaria-voice.exe", "$dir\otzaria-voice.exe" | Format-Table Hash, Path
+
+      # Launchers that run each service with PATH = System32 and Windows only
+      # (2.5.1 also searched PATH).
+      - name: כלים לבדיקות
+        shell: bash
+        run: |
+          for v in "old $(cygpath -u "$RUNNER_TEMP")/old/otzaria-voice.exe" \
+                   "new $(cygpath -u "$LOCALAPPDATA")/Programs/OtzariaVoice/otzaria-voice.exe"; do
+            set -- $v
+            printf '#!/usr/bin/env bash\nPATH=/c/Windows/System32:/c/Windows exec "%s" "$@"\n' "$2" >"$1.sh"
+            chmod +x "$1.sh"
+          done
+
+      - name: 2.5.1 עובר כשיש Visual C++ במערכת (ביקורת)
+        shell: bash
+        run: |
+          bash installer/ci/smoke-test.sh ./old.sh
+          bash installer/ci/stop-service.sh
+
+      - name: הסתרת Visual C++ מ-System32
+        shell: pwsh
+        run: |
+          $sys = "$env:SystemRoot\System32"
+          foreach ($f in 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            $p = Join-Path $sys $f
+            if (-not (Test-Path $p)) { continue }
+            takeown /f $p | Out-Null
+            icacls $p /grant '*S-1-5-32-544:F' | Out-Null
+            Rename-Item $p "$f.hidden"
+            if (Test-Path $p) { Write-Error "$f is still in System32"; exit 1 }
+          }
+          # 2.5.1 also searched the Windows folder, its 16-bit system folder and PATH
+          # (the launchers keep PATH to System32 and Windows).
+          foreach ($d in $sys, $env:SystemRoot, "$env:SystemRoot\System") {
+            if (-not (Test-Path $d)) { continue }
+            $left = Get-ChildItem $d -File | Where-Object { $_.Name -match '^(msvcp140(_1)?|vcruntime140(_1)?)\.dll$' }
+            if ($left) { Write-Error "left in $d`: $($left.Name -join ', ')"; exit 1 }
+          }
+          Write-Host 'Visual C++ runtime hidden from System32'
+
+      - name: 2.5.1 נכשל (שחזור התקלה)
+        shell: bash
+        run: |
+          code=0
+          bash installer/ci/smoke-test.sh ./old.sh >old.out 2>&1 || code=$?
+          cat old.out
+          bash installer/ci/stop-service.sh
+          [ "$code" -ne 0 ] || { echo "::error::2.5.1 passed: this machine does not reproduce the bug"; exit 1; }
+          grep -q 'cannot load .*Otzaria.*onnxruntime\.dll' old.out ||
+            { echo "::error::2.5.1 failed, but not with cannot load ...Otzaria\\onnxruntime\\onnxruntime.dll"; exit 1; }
+          echo "reproduced: 2.5.1 cannot load Otzaria's ONNX Runtime"
+
+      - name: הבנייה הזו מכתיבה
+        shell: bash
+        run: |
+          bash installer/ci/smoke-test.sh ./new.sh
+          bash installer/ci/stop-service.sh
+          line="$(grep -a 'Visual C++ runtime from' "$(cygpath -u "$LOCALAPPDATA")/OtzariaVoice/service.log" | tail -1)"
+          echo "$line"
+          grep -qi 'from .*Programs.Otzaria.VCRUNTIME140\.dll and .*Programs.Otzaria.MSVCP140\.dll' <<<"$line" ||
+            { echo "::error::the Visual C++ runtime did not come from Otzaria's folder"; exit 1; }
+
+      - name: בלי Visual C++ גם אצל אוצריא, ההודעה כוללת את קוד השגיאה
+        shell: bash
+        run: |
+          otz="$(cygpath -u "$LOCALAPPDATA")/Programs/Otzaria"
+          for f in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do mv "$otz/$f" "$otz/$f.hidden"; done
+          code=0
+          bash installer/ci/smoke-test.sh ./new.sh >new.out 2>&1 || code=$?
+          cat new.out
+          bash installer/ci/stop-service.sh
+          [ "$code" -ne 0 ] || { echo "::error::dictated with no Visual C++ anywhere"; exit 1; }
+          grep -q 'cannot load .*onnxruntime\.dll (Windows error 126)' new.out ||
+            { echo "::error::the message has no Windows error 126"; exit 1; }
+
+      # A damaged ONNX Runtime must come back as an error, not as a "Bad Image"
+      # box that holds the load until someone closes it (SetThreadErrorMode in
+      # platform.cpp). 2.5.1 runs too, for comparison only: if it hangs and
+      # this build does not, the box was there and is gone.
+      - name: קובץ ORT פגום — שגיאה ולא חלון
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          f="$(cygpath -u "$RUNNER_TEMP")/damaged/onnxruntime.dll"; mkdir -p "$(dirname "$f")"
+          python -I -c "import sys; b = bytearray(0x86); b[0:2] = b'MZ'; b[60] = 0x80; b[0x80:0x84] = b'PE\0\0'; b[0x84:0x86] = (0xAA64).to_bytes(2, 'little'); open(sys.argv[1], 'wb').write(b)" "$f"
+          export OTZARIA_ORT_PATH="$(cygpath -w "$f")"
+          log="$(cygpath -u "$LOCALAPPDATA")/OtzariaVoice/service.log"
+          for exe in old new; do
+            code=0
+            timeout 60 "./$exe.sh" --eval "$(cygpath -w "$PWD/none.jsonl")" "$(cygpath -w "$PWD/none-out.jsonl")" || code=$?
+            echo "$exe: exit $code; log: $(tail -1 "$log")"
+            if [ "$exe" = new ]; then
+              [ "$code" -ne 124 ] || { echo "::error::this build hung on a damaged library"; exit 1; }
+              tail -1 "$log" | grep -q 'cannot load .*damaged.*(Windows error' ||
+                { echo "::error::no Windows error for the damaged library"; exit 1; }
+            fi
+          done
+
+  # Windows on ARM (service/src/common/handoff.h): Otzaria's ARM build carries
+  # an ARM64 ONNX Runtime, which an x64 program cannot load. The ARM64 build
+  # of the service is made here, natively, and rides in the x64 job's installers.
+  windows-arm64-build:
+    name: Windows ARM64 — בנייה
+    needs: detect
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: בניית השירות (ARM64) ובדיקות היחידה
+        shell: pwsh
+        env:
+          OTZARIA_VOICE_ARCH: ARM64
+        run: |
+          cmd /c service\build.cmd
+          if ($LASTEXITCODE) { exit 1 }
+          ctest --test-dir service/out/build-arm64 -C Release --output-on-failure
+          if ($LASTEXITCODE) { exit 1 }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item service/out/otzaria-voice-arm64.exe dist/
+          Get-Item dist/otzaria-voice-arm64.exe | Format-List Name, Length
+          python -I installer/ci/pe-imports.py dist/otzaria-voice-arm64.exe | Select-Object -First 1
+
+      # Only for the tests: on users' machines the service uses Otzaria's copy.
+      - name: ONNX Runtime ל-ARM64 (לבדיקה בלבד)
+        shell: bash
+        run: |
+          d="$(bash installer/fetch-ort.sh win-arm64 "$RUNNER_TEMP/ort")"
+          # The folder added to the DLL search is removed right after the load:
+          # only safe for a library that loads nothing later.
+          python -I installer/ci/pe-imports.py "$d/lib/onnxruntime.dll" --no-delay
+          echo "OTZARIA_ORT_PATH=$(cygpath -w "$d/lib/onnxruntime.dll")" >>"$GITHUB_ENV"
+
+      - name: מטמון חבילת הקול
+        uses: actions/cache@v6
+        with:
+          path: .cache/voice-pack
+          key: ${{ env.PACK_CACHE_KEY }}
+      - name: הורדת חבילת הקול ואימותה
+        shell: bash
+        run: |
+          bash installer/fetch-pack.sh .cache/voice-pack dist/pack
+          echo "OTZARIA_VOICE_PACK_DIR=$(cygpath -w "$PWD/dist/pack")" >>"$GITHUB_ENV"
+
+      - name: הכתבה בבנייה ל-ARM64
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          EXPECT_ARCH=arm64 bash installer/ci/smoke-test.sh dist/otzaria-voice-arm64.exe
+          bash installer/ci/stop-service.sh
+
+      - name: העלאה
+        uses: actions/upload-artifact@v7
+        with:
+          name: otzaria-voice-windows-arm64-exe
+          path: dist/otzaria-voice-arm64.exe
+          if-no-files-found: error
+
+  # The installers on a Windows on ARM machine, with Otzaria's layout made by
+  # hand (%LOCALAPPDATA%\Programs\Otzaria: ONNX Runtime in onnxruntime\, the
+  # Visual C++ runtime of the same processor next to it, as Otzaria ships them).
+  windows-arm64-test:
+    name: Windows ARM64 — התקנה והחלפת גרסה
+    needs: [detect, windows]
+    runs-on: windows-11-arm
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: otzaria-voice-windows-x64-with-models
+          path: setup
+
+      # The Visual C++ runtime as each Otzaria build ships it: the ARM build
+      # copies the ARM runner's System32 (Otzaria's build-and-announce.yml);
+      # the x64 files come from Visual Studio's redistributable folder.
+      - name: קובצי Visual C++ לשני המעבדים
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          $x64 = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT\vcruntime140.dll" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $x64) { Write-Error "no x64 Visual C++ runtime under $vs\VC\Redist\MSVC"; exit 1 }
+          $from = @{ arm64 = "$env:SystemRoot\System32"; x64 = $x64.DirectoryName }
+          foreach ($arch in 'arm64', 'x64') {
+            $dst = "$env:RUNNER_TEMP\layout\$arch"
+            New-Item -ItemType Directory -Force "$dst\onnxruntime" | Out-Null
+            Copy-Item "$($from[$arch])\msvcp140.dll", "$($from[$arch])\msvcp140_1.dll", "$($from[$arch])\vcruntime140*.dll" $dst
+            Write-Host "$arch runtime from $($from[$arch]):"
+            Get-ChildItem $dst -File | ForEach-Object { "  $($_.Name) $($_.VersionInfo.FileVersion)" }
+          }
+      - name: ONNX Runtime לשני המעבדים
+        shell: bash
+        run: |
+          for a in arm64 x64; do
+            d="$(bash installer/fetch-ort.sh win-$a "$RUNNER_TEMP/ort-$a")"
+            cp "$d/lib/onnxruntime.dll" "$(cygpath -u "$RUNNER_TEMP")/layout/$a/onnxruntime/"
+          done
+          # otzaria.sh <arm64|x64>: Otzaria's folder as the build for that processor leaves it.
+          cat >"$RUNNER_TEMP/otzaria.sh" <<'EOF'
+          set -euo pipefail
+          otz="$(cygpath -u "$LOCALAPPDATA")/Programs/Otzaria"
+          rm -rf "$otz"; mkdir -p "$otz"
+          cp -r "$(cygpath -u "$RUNNER_TEMP")/layout/$1/." "$otz/"
+          python -I installer/ci/pe-imports.py "$otz/onnxruntime/onnxruntime.dll" | grep -q ": $1\$" ||
+            { echo "::error::Otzaria layout: the ONNX Runtime is not $1"; exit 1; }
+          echo "Otzaria layout: $1"
+          EOF
+          # runtime-from.sh: the last load in the log took the Visual C++ runtime
+          # from Otzaria's folder, by the new search (not the old one).
+          cat >"$RUNNER_TEMP/runtime-from.sh" <<'EOF'
+          line="$(grep -a 'Visual C++ runtime from' "$(cygpath -u "$LOCALAPPDATA")/OtzariaVoice/service.log" | tail -1)"
+          echo "$line"
+          if ! grep -qi 'from .*Programs.Otzaria.VCRUNTIME140\.dll and .*Programs.Otzaria.MSVCP140\.dll' <<<"$line" ||
+             grep -q '(old search)' <<<"$line"; then
+            echo "::error::the Visual C++ runtime did not come from Otzaria's folder by the new search"; exit 1
+          fi
+          EOF
+
+      - name: התקנת 2.5.1 (מהשחרור)
+        shell: pwsh
+        run: |
+          gh release download service-v2.5.1 --repo $env:GITHUB_REPOSITORY --pattern 'otzaria-voice-windows-x64-without-models-2.5.1.exe' --dir old
+          if ($LASTEXITCODE) { exit 1 }
+          $p = Start-Process (Get-Item old\*.exe).FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(600000)) { Write-Error '2.5.1 setup did not finish'; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "2.5.1 setup exited $($p.ExitCode)"; exit 1 }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\old" | Out-Null
+          Copy-Item "$env:LOCALAPPDATA\Programs\OtzariaVoice\otzaria-voice.exe" "$env:RUNNER_TEMP\old\"
+
+      - name: 2.5.1 (x64 בלבד) לא טוען את ה-ORT של ARM64 (שחזור התקלה)
+        shell: bash
+        run: |
+          old="$(cygpath -u "$RUNNER_TEMP")/old"
+          bash installer/ci/stop-service.sh 47811
+          bash "$RUNNER_TEMP/otzaria.sh" x64
+          # Positive control. 2.5.1 never searches Otzaria's root, only the
+          # library's folder, System32 and PATH: the x64 runtime goes next to
+          # the library too, so the result depends only on what this test laid out.
+          cp "$(cygpath -u "$RUNNER_TEMP")/layout/x64/"*.dll "$(cygpath -u "$LOCALAPPDATA")/Programs/Otzaria/onnxruntime/"
+          bash installer/ci/smoke-test.sh "$old/otzaria-voice.exe"
+          bash installer/ci/stop-service.sh
+          bash "$RUNNER_TEMP/otzaria.sh" arm64
+          code=0
+          bash installer/ci/smoke-test.sh "$old/otzaria-voice.exe" >old.out 2>&1 || code=$?
+          cat old.out
+          bash installer/ci/stop-service.sh
+          [ "$code" -ne 0 ] || { echo "::error::2.5.1 loaded the ARM64 ONNX Runtime: this does not reproduce the bug"; exit 1; }
+          grep -q 'cannot load .*Otzaria.*onnxruntime\.dll' old.out ||
+            { echo "::error::2.5.1 failed, but not with cannot load ...Otzaria\\onnxruntime\\onnxruntime.dll"; exit 1; }
+          echo "reproduced: x64 2.5.1 cannot load Otzaria's ARM64 ONNX Runtime"
+
+      - name: התקנה (with-models) של הבנייה הזו
+        shell: pwsh
+        run: |
+          $setup = Get-Item "setup\otzaria-voice-windows-x64-with-models-$env:VERSION.exe"
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$pwd\install.log" -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(600000)) { Write-Error 'setup did not finish'; exit 1 }
+          Get-Content install.log -Tail 15
+          if ($p.ExitCode -ne 0) { Write-Error "setup exited $($p.ExitCode)"; exit 1 }
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          foreach ($f in 'otzaria-voice.exe', 'otzaria-voice-arm64.exe') {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "$f not installed"; exit 1 }
+          }
+          $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OtzariaVoice).OtzariaVoice
+          if ($run -ne "`"$dir\otzaria-voice.exe`"") { Write-Error "login start is $run"; exit 1 }
+          Write-Host "installed both builds; login start = $run"
+
+      - name: אוצריא ARM64 — הגרסה ל-ARM64 עונה, גם להכתבה וגם ל-eval
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          bash installer/ci/stop-service.sh 47811
+          bash "$RUNNER_TEMP/otzaria.sh" arm64
+          EXPECT_ARCH=arm64 bash installer/ci/smoke-test.sh "$(cygpath -u "$LOCALAPPDATA")/Programs/OtzariaVoice/otzaria-voice.exe"
+          bash installer/ci/stop-service.sh
+          grep -a 'handoff to .*otzaria-voice-arm64.exe: serving' "$(cygpath -u "$LOCALAPPDATA")/OtzariaVoice/service.log" | tail -1
+          bash "$RUNNER_TEMP/runtime-from.sh"
+
+      - name: אוצריא x64 במחשב ARM — גרסת x64 עונה
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          bash "$RUNNER_TEMP/otzaria.sh" x64
+          EXPECT_ARCH=x64 bash installer/ci/smoke-test.sh "$(cygpath -u "$LOCALAPPDATA")/Programs/OtzariaVoice/otzaria-voice.exe"
+          bash installer/ci/stop-service.sh
+          bash "$RUNNER_TEMP/runtime-from.sh"
+
+      # Otzaria's update moves an x64 install to the ARM build while the
+      # service runs: the next load fails (193) and the service restarts
+      # through the x64 build, which hands over to the ARM64 one.
+      - name: אוצריא מחליפה מעבד בזמן ריצה
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          dir="$(cygpath -u "$LOCALAPPDATA")/Programs/OtzariaVoice"
+          h=(-H 'X-Otzaria-Voice: 1'); s=http://127.0.0.1:47899
+          python -I -c "import wave,struct,random,sys; random.seed(1); w=wave.open(sys.argv[1],'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b''.join(struct.pack('<h', random.randint(-60,60)) for _ in range(24000))); w.close()" quiet.wav
+          export OTZARIA_VOICE_PORT=47899 OTZARIA_VOICE_TEST_WAV="$(cygpath -w "$PWD/quiet.wav")"
+          bash "$RUNNER_TEMP/otzaria.sh" x64
+          "$dir/otzaria-voice.exe" --serve &
+          for _ in $(seq 1 30); do st="$(curl -sf "${h[@]}" "$s/status" || true)"; [ -n "$st" ] && break; sleep 1; done
+          grep -q '"arch":"x64"' <<<"$st" || { echo "::error::x64 should serve first: $st"; exit 1; }
+          bash "$RUNNER_TEMP/otzaria.sh" arm64   # nothing loaded yet: the files can be replaced
+          out="$(curl -sN "${h[@]}" -H 'Content-Type: application/json' --max-time 60 -d '{"noSpeechMs":1500,"endAfterSilenceMs":1500}' "$s/dictate" || true)"
+          echo "$out"
+          grep -q 'מתחלף' <<<"$out" || { echo "::error::no switching message"; exit 1; }
+          st=""
+          for _ in $(seq 1 40); do st="$(curl -sf "${h[@]}" "$s/status" || true)"; grep -q '"arch":"arm64"' <<<"$st" && break; sleep 1; done
+          echo "$st"
+          grep -q '"arch":"arm64"' <<<"$st" || { echo "::error::the ARM64 build did not take over"; exit 1; }
+          # The x64 parent leaves just after the ARM64 build takes the port.
+          for _ in $(seq 1 10); do
+            pids="$(tasklist //FI "IMAGENAME eq otzaria-voice*" //FO CSV //NH | grep '"otzaria-voice' | cut -d, -f2 || true)"
+            [ "$(grep -c . <<<"$pids")" -eq 1 ] && break
+            sleep 0.5
+          done
+          echo "service processes: $pids"
+          [ "$(grep -c . <<<"$pids")" -eq 1 ] || { echo "::error::not exactly one service process"; exit 1; }
+          bash installer/ci/stop-service.sh
+
+      # The other build does not start serving (played here by a program that
+      # exits at once): x64 serves, and the ARM64 library is reported with a
+      # message instead of restarting over and over.
+      - name: הגרסה השנייה לא עולה — הודעה, בלי לולאה
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          dir="$(cygpath -u "$LOCALAPPDATA")/Programs/OtzariaVoice"
+          mv "$dir/otzaria-voice-arm64.exe" "$dir/otzaria-voice-arm64.exe.real"
+          cp /c/Windows/System32/hostname.exe "$dir/otzaria-voice-arm64.exe"
+          h=(-H 'X-Otzaria-Voice: 1'); s=http://127.0.0.1:47899
+          export OTZARIA_VOICE_PORT=47899 OTZARIA_VOICE_TEST_WAV="$(cygpath -w "$PWD/quiet.wav")"
+          bash "$RUNNER_TEMP/otzaria.sh" arm64
+          "$dir/otzaria-voice.exe" --serve &
+          for _ in $(seq 1 30); do st="$(curl -sf "${h[@]}" "$s/status" || true)"; [ -n "$st" ] && break; sleep 1; done
+          grep -q '"arch":"x64"' <<<"$st" || { echo "::error::x64 should serve after the failed handoff: $st"; exit 1; }
+          pids() { tasklist //FI "IMAGENAME eq otzaria-voice*" //FO CSV //NH | grep '"otzaria-voice' | cut -d, -f2 || true; }
+          before="$(pids)"
+          [ "$(grep -c . <<<"$before")" -eq 1 ] || { echo "::error::not exactly one service process: $before"; exit 1; }
+          out="$(curl -sN "${h[@]}" -H 'Content-Type: application/json' --max-time 60 -d '{"noSpeechMs":1500,"endAfterSilenceMs":1500}' "$s/dictate" || true)"
+          echo "$out"
+          grep -q 'התקינו מחדש' <<<"$out" || { echo "::error::no reinstall message"; exit 1; }
+          sleep 5
+          after="$(pids)"
+          echo "before: $before"; echo "after: $after"
+          [ "$before" = "$after" ] || { echo "::error::the service restarted"; exit 1; }
+          bash installer/ci/stop-service.sh
+          mv -f "$dir/otzaria-voice-arm64.exe.real" "$dir/otzaria-voice-arm64.exe"
+
+      - name: הסרה מוחקת את שתי הגרסאות
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          $p = Start-Process "$dir\otzaria-voice.exe" -ArgumentList '--uninstall', '--quiet' -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(120000)) { Write-Error 'uninstall did not finish'; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "uninstall exited $($p.ExitCode)"; exit 1 }
+          for ($i = 0; $i -lt 30 -and (Test-Path $dir); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $dir) { Get-ChildItem $dir; Write-Error 'the install folder is still there'; exit 1 }
+          Write-Host 'both builds and the folder removed'
 
   linux:
     name: Linux ${{ matrix.arch }}
@@ -454,7 +891,7 @@ jobs:
 
   release:
     name: GitHub Release (שירות)
-    needs: [detect, windows, linux, macos, android, android-test]
+    needs: [detect, windows-arm64-build, windows, windows-no-vcredist, windows-arm64-test, linux, macos, android, android-test]
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       !cancelled() && !contains(needs.*.result, 'failure')
@@ -488,6 +925,9 @@ jobs:
       - name: יצירת ה-Release
         if: steps.check.outputs.exists == 'false'
         run: |
+          # The ARM64 build ships inside the Windows installers only: alone,
+          # started by hand, it would install itself without the x64 build.
+          rm -f files/otzaria-voice-arm64.exe
           ls -l files
           (cd files && sha256sum * >SHA256SUMS.txt)
           cat >notes.md <<EOF

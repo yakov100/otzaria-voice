@@ -7,7 +7,8 @@
 #
 #   smoke-test.sh <service executable or launcher>
 #
-# OTZARIA_ORT_PATH may be set by the caller (Windows CI has no Otzaria install).
+# OTZARIA_ORT_PATH may be set by the caller (Windows CI has no Otzaria install);
+# EXPECT_ARCH=x64|arm64 also checks which build answers.
 set -euo pipefail
 
 exe="$1"
@@ -40,10 +41,19 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 echo "status: $status"
-fail() { echo "::error::smoke test: $*"; cat "$work/service.out" || true; kill "$pid" 2>/dev/null || true; exit 1; }
+fail() {
+  echo "::error::smoke test: $*"; cat "$work/service.out" || true
+  # Through a launcher, $pid may not be the service itself: ask it to quit too.
+  curl -s "${hdr[@]}" -X POST "$base/quit" >/dev/null 2>&1 || true
+  kill "$pid" 2>/dev/null || true; exit 1
+}
 [ -n "$status" ] || fail "the service did not answer on $base"
 grep -q '"runtime":true' <<<"$status" || fail "ONNX Runtime not found"
 grep -q '"pack":true' <<<"$status" || fail "voice pack not found"
+# EXPECT_ARCH=x64|arm64: the build that answers (Windows on ARM hands over, handoff.h).
+if [ -n "${EXPECT_ARCH:-}" ]; then
+  grep -q "\"arch\":\"$EXPECT_ARCH\"" <<<"$status" || fail "the service answering is not the $EXPECT_ARCH build"
+fi
 
 curl -sN "${hdr[@]}" -H "Content-Type: application/json" --max-time 180 \
   -d '{"noSpeechMs":1500,"endAfterSilenceMs":1500}' "$base/dictate" >"$work/dictate.out" || true

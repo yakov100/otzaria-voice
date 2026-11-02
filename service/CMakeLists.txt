@@ -30,6 +30,7 @@ set(SRC_TTS ${SRC}/tts)
 include_directories(${SRC_COMMON} ${SRC_DICTATION} ${SRC_TTS})
 set(COMMON_SOURCES
   ${SRC_COMMON}/audio.cpp
+  ${SRC_COMMON}/handoff.cpp
   ${SRC_DICTATION}/engine.cpp
   ${SRC_TTS}/light.cpp
   ${SRC_TTS}/nakdan.cpp
@@ -98,3 +99,12 @@ else()
     set_target_properties(otzaria-voice PROPERTIES INSTALL_RPATH "$ORIGIN")
   endif()
 endif()
+
+# Unit tests (ctest -C Release): not part of the program that ships.
+enable_testing()
+add_executable(otzaria-voice-tests tests/handoff_test.cpp ${SRC_COMMON}/handoff.cpp)
+if(MSVC)
+  set_property(TARGET otzaria-voice-tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  target_compile_options(otzaria-voice-tests PRIVATE /utf-8 /W3 /EHsc)
+endif()
+add_test(NAME handoff COMMAND otzaria-voice-tests)

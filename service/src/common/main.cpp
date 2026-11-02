@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "handoff.h"
 #include "install.h"
 #include "platform.h"
 #include "service.h"
@@ -29,7 +30,107 @@
 
 namespace {
 
-int run(const std::vector<std::string>& args) {
+#ifdef _WIN32
+// Starts [exe] with [args], inheriting no handles (the service's sockets stay
+// its own). Returns the process, or null.
+HANDLE start(const platform::Path& exe, const std::vector<std::string>& args) {
+  std::wstring line = handoff::quote(exe.wstring());
+  for (const auto& a : args) line += L" " + handoff::quote(platform::fromUtf8(a).wstring());
+  STARTUPINFOW si{sizeof si};
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(exe.c_str(), line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si,
+                      &pi))
+    return nullptr;
+  CloseHandle(pi.hThread);
+  return pi.hProcess;
+}
+
+// --after-pid: the copy that started this one is quitting; wait for it and
+// for its hold on the port to go.
+void waitFor(unsigned long pid) {
+  if (HANDLE p = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+    if (WaitForSingleObject(p, 30000) == WAIT_TIMEOUT)
+      platform::log("handoff: process " + std::to_string(pid) + " still running after 30 s");
+    CloseHandle(p);
+  }
+  for (int i = 0; i < 120 && service::running(); i++) platform::sleepMs(1000);
+}
+
+// The other build, when ONNX Runtime is built for its processor and it lies
+// next to this one; empty otherwise.
+platform::Path otherBuild() {
+  const auto ort = platform::findOnnxRuntime();
+  if (ort.empty()) return {};
+  const auto want = handoff::wanted(handoff::self(), handoff::machine(ort));
+  if (want == handoff::Arch::Unknown) return {};
+  std::error_code ec;
+  const auto other = platform::exeDir() / handoff::exeName(want);
+  return std::filesystem::exists(other, ec) ? other : platform::Path();
+}
+
+// Commands that load ONNX Runtime run in the build that can load it
+// (handoff.h). Returns the exit code when the other build ran the command,
+// or -1 for this build to run it.
+int passOn(const std::vector<std::string>& args, const handoff::Flags& flags) {
+  const std::string arg = args.size() > 1 ? args[1] : "";
+  const bool serving = arg == "--serve" || (arg.empty() && install::isInstalledCopy());
+  if (!serving && arg != "--eval" && arg != "--narrate" && arg != "--light" && arg != "--vocalize")
+    return -1;
+  if (flags.afterPid) waitFor(flags.afterPid);
+  if (flags.noHandoff) return -1;
+  if (serving && service::running()) return 0;  // as serve() would
+  const auto other = otherBuild();
+  if (other.empty()) return -1;
+  const auto log = [&](const std::string& what) {
+    platform::log("handoff to " + platform::toUtf8(other) + ": " + what);
+  };
+  HANDLE p = start(other, handoff::forward(args, service::kVersion));
+  if (!p) {
+    log("cannot start it");
+    if (serving) service::handoffFailed();
+    return -1;
+  }
+  DWORD code = 1;
+  if (!serving) {
+    WaitForSingleObject(p, INFINITE);
+    GetExitCodeProcess(p, &code);
+    CloseHandle(p);
+    if (code != DWORD(handoff::kOtherVersion)) return int(code);
+    log("another version");
+    return -1;
+  }
+  // Serving: the other build takes over once it holds the port's mutex.
+  bool took = false;
+  for (int i = 0; i < 100 && !took; i++) {
+    took = service::running();
+    if (!took && WaitForSingleObject(p, 100) == WAIT_OBJECT_0) break;
+  }
+  took = took || service::running();
+  if (!took && GetExitCodeProcess(p, &code) && code == STILL_ACTIVE) {
+    TerminateProcess(p, 1);
+    code = 1;
+  }
+  CloseHandle(p);
+  if (took) {
+    log("serving");
+    return 0;
+  }
+  log("did not start serving (exit " + std::to_string(code) + "); serving here");
+  service::handoffFailed();
+  return -1;
+}
+#endif
+
+int run(std::vector<std::string> args) {
+#ifdef _WIN32
+  const auto flags = handoff::take(args);
+  if (!flags.expectVersion.empty() && flags.expectVersion != service::kVersion) {
+    platform::log(std::string("handoff: this build is ") + service::kVersion + ", not " +
+                  flags.expectVersion);
+    return handoff::kOtherVersion;
+  }
+  if (const int code = passOn(args, flags); code >= 0) return code;
+#endif
   const std::string arg = args.size() > 1 ? args[1] : "";
   if (arg == "--eval" && args.size() > 3) {
     try {
@@ -75,8 +176,7 @@ int run(const std::vector<std::string>& args) {
   if (arg == "--uninstall") return install::uninstall(quiet);
   if (arg == "--serve") return service::serve();
 #ifdef _WIN32
-  if (_wcsicmp(platform::exePath().c_str(), install::installedExe().c_str()) != 0)
-    return install::install(false);
+  if (!install::isInstalledCopy()) return install::install(false);
 #endif
   return service::serve();
 }
