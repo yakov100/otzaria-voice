@@ -14,6 +14,11 @@
 ; (HKCU Run) and its own "Installed apps" entry, and starts. That entry is the
 ; uninstaller, so this setup is not itself uninstallable (no second entry).
 ;
+; With /DSourceExeArm64=path\otzaria-voice-arm64.exe the ARM64 build comes too,
+; unpacked only on Windows on ARM, where --install copies both builds and the
+; x64 one hands over to it when Otzaria's ONNX Runtime is ARM64
+; (service/src/common/handoff.h). On x64 Windows nothing changes.
+;
 ; This file is UTF-8 with a BOM (Inno Setup needs the BOM for Hebrew text).
 
 #ifndef AppVersion
@@ -64,6 +69,9 @@ Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{tmp}"; DestName: "otzaria-voice.exe"; Flags: deleteafterinstall ignoreversion
+#ifdef SourceExeArm64
+Source: "{#SourceExeArm64}"; DestDir: "{tmp}"; DestName: "otzaria-voice-arm64.exe"; Flags: deleteafterinstall ignoreversion; Check: IsArm64
+#endif
 #ifdef PackDir
 Source: "{#PackDir}\*"; DestDir: "{userappdata}\otzaria\stt\pack"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: PackNeeded
 #endif

@@ -19,4 +19,9 @@ int uninstall(bool quiet);
 
 platform::Path installedExe();
 
+#ifdef _WIN32
+// This program runs from the install folder (either build, handoff.h).
+bool isInstalledCopy();
+#endif
+
 }  // namespace install

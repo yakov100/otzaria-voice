@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include "handoff.h"
 #include "json.h"
 #include "light.h"
 #include "live.h"
@@ -52,7 +53,7 @@
 
 namespace service {
 
-const char* kVersion = "2.5.1";
+const char* kVersion = "2.5.2";
 
 namespace {
 
@@ -644,7 +645,8 @@ void handle(Socket s) {
         loaded = engine != nullptr;
       respond(s, 200,
               std::string("{\"service\":\"otzaria-voice\",\"version\":\"") + kVersion +
-                  "\",\"platform\":\"" + kPlatform + "\",\"pack\":" +
+                  "\",\"platform\":\"" + kPlatform + "\",\"arch\":\"" + handoff::name(handoff::self()) +
+                  "\",\"pack\":" +
                   (pack::ready() ? "true" : "false") +
                   ",\"packVersion\":" + std::to_string(pack::installedVersion()) +
                   ",\"packSize\":" + std::to_string(pack::kRelease.size) +
@@ -1014,13 +1016,73 @@ static bool runAtFullSpeed() {
 }
 #endif
 
+#ifdef _WIN32
+// One instance per port (a test instance may run beside the installed one).
+static std::wstring mutexName() { return L"Local\\OtzariaVoiceService-" + std::to_wstring(port()); }
+
+// 0: may switch builds; 1: switching now; 2: the other build failed at start.
+static std::atomic<int> buildSwitch{0};
+
+static const char* kSwitching =
+    "שירות הדיבור מתחלף לגרסה המתאימה למחשב, נסו שוב בעוד כמה שניות";
+
+// Otzaria changed processor while the service ran (its update moves ARM
+// machines to the ARM build): the library is now built for the other one.
+// The x64 build in this folder is started to wait for this process to end
+// and to start as at login, handing over to the right build; this one quits.
+static std::string switchBuild(const platform::Path& library) {
+  const auto want = handoff::wanted(handoff::self(), handoff::machine(library));
+  if (want == handoff::Arch::Unknown) return "";
+  std::error_code ec;
+  const auto other = platform::exeDir() / handoff::exeName(want);
+  if (!std::filesystem::exists(other, ec)) return "";
+  if (buildSwitch == 2)
+    return "הקובץ השני של שירות הדיבור בגרסה אחרת או לא עולה. התקינו מחדש את שירות הדיבור";
+  int idle = 0;
+  if (!buildSwitch.compare_exchange_strong(idle, 1)) return kSwitching;
+  auto entry = platform::exeDir() / handoff::exeName(handoff::Arch::X64);
+  if (!std::filesystem::exists(entry, ec)) entry = other;
+  std::wstring line = handoff::quote(entry.wstring()) + L" --serve --after-pid " +
+                      std::to_wstring(GetCurrentProcessId());
+  STARTUPINFOW si{sizeof si};
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(entry.c_str(), line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si,
+                      &pi)) {
+    buildSwitch = 2;
+    platform::log("cannot start " + platform::toUtf8(entry) + " to switch builds");
+    return "";
+  }
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  platform::log(std::string("ONNX Runtime is now ") + handoff::name(want) + ": restarting through " +
+                platform::toUtf8(entry));
+  // The failed request gets its message first.
+  std::thread([] {
+    platform::sleepMs(500);
+    requestQuit();
+  }).detach();
+  return kSwitching;
+}
+
+bool running() {
+  HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, mutexName().c_str());
+  if (!m) return false;
+  CloseHandle(m);
+  return true;
+}
+
+void handoffFailed() { buildSwitch = 2; }
+#else
+bool running() { return false; }
+void handoffFailed() {}
+#endif
+
 int serve() {
 #ifdef _WIN32
-  // One instance per port (a test instance may run beside the installed one).
-  const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(port());
-  HANDLE single = CreateMutexW(nullptr, TRUE, mutexName.c_str());
+  HANDLE single = CreateMutexW(nullptr, TRUE, mutexName().c_str());
   if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
   if (!runAtFullSpeed()) platform::log("cannot turn efficiency mode off");
+  platform::onOtherProcessor(switchBuild);
 #endif
   netStartup();
   quitting = false;

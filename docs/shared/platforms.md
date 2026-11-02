@@ -54,10 +54,10 @@ library), `OTZARIA_VOICE_PACK_URL`, `OTZARIA_VOICE_TEST_WAV` (testing: plays a
 
 | | Windows | Linux | macOS | Android |
 |---|---|---|---|---|
-| Per-user install by `--install` | `%LOCALAPPDATA%\Programs\OtzariaVoice\otzaria-voice.exe` | `~/.local/lib/otzaria-voice/otzaria-voice` (+ `libonnxruntime*` lying next to the source exe, symlinks kept) | `~/Library/Application Support/OtzariaVoice/otzaria-voice` (+ `libonnxruntime*`) | the APK |
+| Per-user install by `--install` | `%LOCALAPPDATA%\Programs\OtzariaVoice\otzaria-voice.exe`; on Windows on ARM also `otzaria-voice-arm64.exe` beside it (see below) | `~/.local/lib/otzaria-voice/otzaria-voice` (+ `libonnxruntime*` lying next to the source exe, symlinks kept) | `~/Library/Application Support/OtzariaVoice/otzaria-voice` (+ `libonnxruntime*`) | the APK |
 | Installed for everyone (package) | — | exe under `/usr/` or `/opt/`: `--install` runs it in place and only adds login start | exe inside an `.app` bundle: same | — |
 | Login start | `HKCU\...\Run\OtzariaVoice` = `"<exe>"`, plus an "Installed apps" entry (`HKCU\...\Uninstall\OtzariaVoice`) | `~/.config/autostart/otzaria-voice.desktop` (`Exec="<exe>" --serve`) | `~/Library/LaunchAgents/org.otzaria.voice.plist` (`<exe> --serve`, RunAtLoad, restarted only after a crash), loaded with `launchctl bootstrap gui/<uid>` | boot receiver starts the foreground service |
-| ONNX Runtime looked up in | `OTZARIA_ORT_PATH`; `<exe dir>\onnxruntime\onnxruntime.dll`; Otzaria's install (registry "Uninstall" entries named Otzaria/אוצריא, the folder of `exePath` in `%APPDATA%\otzaria\otzaria_capabilities.json`, `%LOCALAPPDATA%\Programs\Otzaria`, `%ProgramFiles%\Otzaria`); last, the folder of a running `otzaria.exe` in the same session (a portable Otzaria) — always `<dir>\onnxruntime\onnxruntime.dll` | `OTZARIA_ORT_PATH`; next to the exe (`libonnxruntime.so`, `libonnxruntime.so.1`); `<exe>/lib`, `<exe>/onnxruntime`, `<exe>/../lib/otzaria-voice`; `/usr/lib/otzaria-voice`; Otzaria bundles (`/opt/otzaria`, `/usr/lib/otzaria`, `/usr/share/otzaria`, `/usr/local/lib/otzaria`, `/app/otzaria` + `/onnxruntime/`); finally the system loader | `OTZARIA_ORT_PATH`; next to the exe; `../Frameworks` (app bundle); `/Applications/Otzaria Voice.app/Contents/Frameworks`; `/Applications/Otzaria.app/Contents/Frameworks`; `~/Applications/Otzaria.app/...`; system loader | `libonnxruntime.so` from the APK (onnxruntime-android) |
+| ONNX Runtime looked up in | `OTZARIA_ORT_PATH`; `<exe dir>\onnxruntime\onnxruntime.dll`; Otzaria's install (registry "Uninstall" entries named Otzaria/אוצריא, the folder of `exePath` in `%APPDATA%\otzaria\otzaria_capabilities.json`, `%LOCALAPPDATA%\Programs\Otzaria`, `%ProgramFiles%\Otzaria`); last, the folder of a running `otzaria.exe` in the same session (a portable Otzaria) — always `<dir>\onnxruntime\onnxruntime.dll`. Its Visual C++ runtime is searched in `<dir>` (Otzaria keeps it next to otzaria.exe and no longer installs it into Windows) before System32 | `OTZARIA_ORT_PATH`; next to the exe (`libonnxruntime.so`, `libonnxruntime.so.1`); `<exe>/lib`, `<exe>/onnxruntime`, `<exe>/../lib/otzaria-voice`; `/usr/lib/otzaria-voice`; Otzaria bundles (`/opt/otzaria`, `/usr/lib/otzaria`, `/usr/share/otzaria`, `/usr/local/lib/otzaria`, `/app/otzaria` + `/onnxruntime/`); finally the system loader | `OTZARIA_ORT_PATH`; next to the exe; `../Frameworks` (app bundle); `/Applications/Otzaria Voice.app/Contents/Frameworks`; `/Applications/Otzaria.app/Contents/Frameworks`; `~/Applications/Otzaria.app/...`; system loader | `libonnxruntime.so` from the APK (onnxruntime-android) |
 | Voice pack read from (first complete) | `OTZARIA_VOICE_PACK_DIR`; `%APPDATA%\otzaria\stt\pack` | `OTZARIA_VOICE_PACK_DIR`; `~/.local/share/otzaria-voice/pack`; `~/.local/share/otzaria/stt/pack`; `/usr/share/otzaria-voice/pack` (read-only is fine) | `OTZARIA_VOICE_PACK_DIR`; `~/Library/Application Support/OtzariaVoice/pack`; `~/Library/Application Support/otzaria/stt/pack`; `<exe>/../Resources/pack`; `/Applications/Otzaria Voice.app/Contents/Resources/pack` | `<files>/stt/pack`; the with-models APK's `assets/pack` is copied there on first run and after each app update |
 | Voice pack downloaded to | `OTZARIA_VOICE_PACK_DIR` if writable, else `%APPDATA%\otzaria\stt\pack` | same rule, else `~/.local/share/otzaria-voice/pack` (`$XDG_DATA_HOME` honoured) | same rule, else `~/Library/Application Support/OtzariaVoice/pack` | `<files>/stt/pack` |
 | Log | `%LOCALAPPDATA%\OtzariaVoice\service.log` | `~/.local/state/otzaria-voice/service.log` (`$XDG_STATE_HOME`) | `~/Library/Logs/OtzariaVoice/service.log` | logcat tag `OtzariaVoice` and `<files>/service.log` |
@@ -66,7 +66,8 @@ A pack folder must contain `ctc/model.int8.onnx`, `ctc/vocab.json`,
 `ctc/preprocessor.json`, `lm/library.otzlm`, `LICENSES.txt` (and optionally
 `lm/phrases.txt`, `version.txt`). Download: the zip in
 `service/src/pack.cpp` (`kRelease`), verified by SHA-256, unpacked by
-`tar.exe` (Windows), `unzip` or `bsdtar` (Linux, macOS), `java.util.zip`
+`tar.exe` (Windows; run in the target folder with the zip's relative path,
+since it reads its arguments in the ANSI code page), `unzip` or `bsdtar` (Linux, macOS), `java.util.zip`
 (Android). Linux and macOS download with the `curl` program — both must be
 installed (they are on macOS and on common desktops).
 
@@ -82,6 +83,14 @@ installed (they are on macOS and on common desktops).
   `"microphone": false`, and `/dictate` answers 503 `microphone_background`
   until the user opens the app once. The plugin explains this.
 - **macOS** asks for microphone permission the first time it records.
+- **Windows on ARM:** Otzaria's ARM build carries an ARM64 ONNX Runtime, which
+  an x64 program cannot load (Windows error 193). The installer (one file for
+  both) also unpacks `otzaria-voice-arm64.exe` there; every command that loads
+  ONNX Runtime looks at the library's processor (PE header) and, when it is
+  the other build's, runs that build instead. If Otzaria switches processor
+  while the service runs, the service restarts through the x64 build.
+  `/status` reports `"arch": "x64"` or `"arm64"` (every system).
+  `service/src/common/handoff.h`.
 - Idle memory: the model loads on the first dictation and is released after
   3 idle minutes; on Windows the idle working set is ~210 KB.
 

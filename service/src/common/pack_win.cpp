@@ -155,21 +155,37 @@ std::string hashFile(const Path& file, const OnProgress& progress) {
   return sha.hex();
 }
 
-// Windows 10 and later ship bsdtar, which reads zip archives.
+// Windows 10 and later ship bsdtar, which reads zip archives. It takes its
+// arguments in the ANSI code page, which loses letters outside it (a profile
+// named in Hebrew on a machine set to English: "Failed to open '...\????\...'").
+// So it runs in [to] and gets the zip's path relative to it, which is ASCII.
 void extract(const Path& zip, const Path& to) {
   const std::wstring tar = util::widen(platform::env("SystemRoot")) + L"\\System32\\tar.exe";
-  std::wstring cmd = L"\"" + tar + L"\" -xf \"" + zip.wstring() + L"\" -C \"" + to.wstring() + L"\"";
+  std::error_code ec;
+  const Path dir = std::filesystem::absolute(to, ec);
+  const Path file = ec ? Path() : std::filesystem::absolute(zip, ec);
+  const std::wstring rel = ec ? std::wstring() : file.lexically_relative(dir).wstring();
+  bool ascii = !rel.empty();
+  for (wchar_t c : rel) ascii = ascii && c < 0x80;
+  std::wstring cmd = L"\"" + tar + L"\" -xf \"" + (ascii ? rel : zip.wstring()) + L"\"";
+  if (!ascii) cmd += L" -C \"" + to.wstring() + L"\"";
   STARTUPINFOW si{sizeof si};
   PROCESS_INFORMATION pi{};
   if (!CreateProcessW(tar.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                      nullptr, &si, &pi))
+                      ascii ? dir.c_str() : nullptr, &si, &pi))
     throw std::runtime_error(lastError("לא ניתן לפתוח את החבילה"));
   WaitForSingleObject(pi.hProcess, INFINITE);
   DWORD code = 1;
   GetExitCodeProcess(pi.hProcess, &code);
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
-  if (code != 0) throw std::runtime_error("פתיחת החבילה נכשלה (" + std::to_string(code) + ")");
+  if (code != 0) {
+    platform::log("pack: tar exit " + std::to_string(code) + " (ANSI code page " +
+                  std::to_string(GetACP()) + ")" +
+                  (ascii ? " in " + util::narrow(dir.wstring()) : std::string()) + ": " +
+                  util::narrow(cmd));
+    throw std::runtime_error("פתיחת החבילה נכשלה (" + std::to_string(code) + ")");
+  }
 }
 
 }  // namespace pack::sys

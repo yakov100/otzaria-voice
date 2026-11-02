@@ -5,6 +5,7 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include "handoff.h"
 #include "install.h"
 #include "pack.h"
 #include "service.h"
@@ -55,9 +56,29 @@ bool launchDetached(const std::wstring& exe) {
 
 platform::Path installedExe() { return platform::Path(installDir() + L"\\otzaria-voice.exe"); }
 
+bool isInstalledCopy() { return sameFile(platform::exeDir().wstring(), installDir()); }
+
+namespace {
+// Copies [from] over [to], retrying while a quitting copy still holds it.
+bool copyFile(const std::wstring& from, const std::wstring& to) {
+  if (sameFile(from, to)) return true;
+  for (int i = 0; i < 20; i++) {
+    if (CopyFileW(from.c_str(), to.c_str(), FALSE)) return true;
+    Sleep(250);
+  }
+  return false;
+}
+}  // namespace
+
+// On Windows on ARM both builds are installed (handoff.h), each under its own
+// name; the login start and "Installed apps" use the x64 one, which hands
+// over at start when Otzaria's ONNX Runtime is ARM64.
 int install(bool quiet) {
-  const std::wstring target = installedExe().wstring();
+  using handoff::Arch;
+  const Arch other = handoff::self() == Arch::Arm64 ? Arch::X64 : Arch::Arm64;
+  const std::wstring dir = installDir() + L"\\";
   const std::wstring self = platform::exePath().wstring();
+  const std::wstring sibling = (platform::exeDir() / handoff::exeName(other)).wstring();
   // A running copy (an older version, say) holds the file: ask it to quit first,
   // and wait until it is gone. Launched while the old copy still held its
   // one-instance mutex, the new copy saw "already running" and exited, which
@@ -72,18 +93,19 @@ int install(bool quiet) {
   }
   CreateDirectoryW((localAppData() + L"\\Programs").c_str(), nullptr);
   CreateDirectoryW(installDir().c_str(), nullptr);
-  if (!sameFile(self, target)) {
-    bool copied = false;
-    for (int i = 0; i < 20 && !copied; i++) {
-      copied = CopyFileW(self.c_str(), target.c_str(), FALSE) != 0;
-      if (!copied) Sleep(250);
-    }
-    if (!copied) {
-      if (!quiet) message(L"ההתקנה נכשלה: לא ניתן להעתיק את הקובץ.", MB_ICONERROR);  // ההתקנה נכשלה: לא ניתן להעתיק את הקובץ.
-      platform::log("install: copy failed");
-      return 1;
-    }
+  const std::wstring own = dir + handoff::exeName(handoff::self());
+  DWORD siblingAttributes = GetFileAttributesW(sibling.c_str());
+  const bool withSibling = siblingAttributes != INVALID_FILE_ATTRIBUTES &&
+                           !(siblingAttributes & FILE_ATTRIBUTE_DIRECTORY);
+  if (!copyFile(self, own) ||
+      (withSibling && !copyFile(sibling, dir + handoff::exeName(other)))) {
+    if (!quiet) message(L"ההתקנה נכשלה: לא ניתן להעתיק את הקובץ.", MB_ICONERROR);  // ההתקנה נכשלה: לא ניתן להעתיק את הקובץ.
+    platform::log("install: copy failed");
+    return 1;
   }
+  const std::wstring x64 = dir + handoff::exeName(Arch::X64);
+  const std::wstring target =
+      GetFileAttributesW(x64.c_str()) != INVALID_FILE_ATTRIBUTES ? x64 : own;
   const std::wstring quoted = L"\"" + target + L"\"";
   HKEY h;
   if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h,
@@ -133,8 +155,11 @@ int uninstall(bool quiet) {
   platform::log("uninstalled, freed " + std::to_string(freed >> 20) + " MB of packs");
   // A running program cannot delete its own file: a hidden shell does it a
   // moment after this process exits.
-  const std::wstring cmd = L"cmd.exe /c ping -n 3 127.0.0.1 >nul & del /f /q \"" +
-                           installedExe().wstring() + L"\" & rmdir \"" + installDir() + L"\"";
+  const std::wstring dir = installDir() + L"\\";
+  const std::wstring cmd = L"cmd.exe /c ping -n 3 127.0.0.1 >nul & del /f /q \"" + dir +
+                           handoff::exeName(handoff::Arch::X64) + L"\" \"" + dir +
+                           handoff::exeName(handoff::Arch::Arm64) + L"\" & rmdir \"" +
+                           installDir() + L"\"";
   STARTUPINFOW si{sizeof si};
   si.dwFlags = STARTF_USESHOWWINDOW;
   si.wShowWindow = SW_HIDE;

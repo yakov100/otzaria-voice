@@ -263,9 +263,58 @@ Path findOnnxRuntime() {
   return Path();
 }
 
+// ONNX Runtime needs the Visual C++ runtime (msvcp140.dll, vcruntime140*.dll).
+// Otzaria no longer installs it into Windows: its copies lie next to
+// otzaria.exe, one folder above onnxruntime\, where a machine that got them
+// from nothing else has them only. That folder is searched too, before
+// System32, while the library and its dependencies load; the old search
+// (which also looked in PATH and the Windows folder) is the fallback. The
+// Windows error code goes into the message: 126 a dependency is missing, 193
+// the library is built for another processor.
+//
+// The added folder is process-wide: for those few milliseconds another
+// thread's load could also see it. Otzaria's folder holds no system DLL names.
+namespace {
+std::string (*otherProcessor)(const Path&) = nullptr;
+}
+
+void onOtherProcessor(std::string (*handler)(const Path& library)) { otherProcessor = handler; }
+
 DynamicLibrary::DynamicLibrary(const Path& path) {
-  handle_ = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-  if (!handle_) throw std::runtime_error("cannot load " + toUtf8(path));
+  static std::mutex loadMu;
+  std::lock_guard<std::mutex> lock(loadMu);
+  std::error_code ec;
+  Path full = fs::absolute(path, ec);  // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs a full path
+  if (ec) full = path;
+  const Path above = full.parent_path().parent_path();
+  DLL_DIRECTORY_COOKIE added = nullptr;
+  if (!above.empty() && fs::exists(above / L"vcruntime140.dll", ec))
+    added = AddDllDirectory(above.c_str());
+  // A damaged file would make Windows show a "Bad Image" box for this
+  // windowless program: the error comes back here instead.
+  DWORD mode = 0;
+  SetThreadErrorMode(SEM_FAILCRITICALERRORS, &mode);
+  handle_ = LoadLibraryExW(full.c_str(), nullptr,
+                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  const DWORD error = handle_ ? 0 : GetLastError();
+  if (added) RemoveDllDirectory(added);
+  if (!handle_) handle_ = LoadLibraryExW(full.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+  SetThreadErrorMode(mode, nullptr);
+  if (!handle_ && error == ERROR_BAD_EXE_FORMAT && otherProcessor) {
+    const std::string message = otherProcessor(full);
+    if (!message.empty()) throw std::runtime_error(message);
+  }
+  if (!handle_)
+    throw std::runtime_error("cannot load " + toUtf8(full) + " (Windows error " +
+                             std::to_string(error) + ")");
+  auto from = [](const wchar_t* name) {
+    wchar_t buf[MAX_PATH * 2];
+    HMODULE m = GetModuleHandleW(name);
+    DWORD n = m ? GetModuleFileNameW(m, buf, MAX_PATH * 2) : 0;
+    return n ? toUtf8(Path(std::wstring(buf, n))) : std::string("nowhere");
+  };
+  log("loaded " + toUtf8(full) + (error ? " (old search)" : "") + ", Visual C++ runtime from " +
+      from(L"vcruntime140.dll") + " and " + from(L"msvcp140.dll"));
 }
 
 DynamicLibrary::~DynamicLibrary() {
@@ -352,6 +401,8 @@ Path findOnnxRuntime() {
   return Path();
 #endif
 }
+
+void onOtherProcessor(std::string (*)(const Path&)) {}
 
 DynamicLibrary::DynamicLibrary(const Path& path) {
   handle_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);

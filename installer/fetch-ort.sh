@@ -4,10 +4,10 @@
 # Prints the unpacked directory (it contains lib/, include/, LICENSE,
 # ThirdPartyNotices.txt).
 #
-#   fetch-ort.sh <linux-x64|linux-aarch64|osx-arm64|win-x64> <out-dir>
+#   fetch-ort.sh <linux-x64|linux-aarch64|osx-arm64|win-x64|win-arm64> <out-dir>
 #
-# win-x64 is used only by CI's smoke test: on users' Windows machines the
-# service uses the copy that comes with Otzaria.
+# win-x64 and win-arm64 are used only by CI's tests: on users' Windows
+# machines the service uses the copy that comes with Otzaria.
 #
 # The hashes below were computed from the release files themselves (and match
 # the digests GitHub publishes for those assets). ONNX Runtime 1.28.0 ships no
@@ -24,11 +24,12 @@ case "$platform" in
   linux-aarch64) sha=e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb ;;
   osx-arm64)     sha=1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8 ;;
   win-x64)       sha=abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc ;;
+  win-arm64)     sha=cbe4547463ece092b505c3581376ed5896d22b5429f39d5e645e425ecdd369ad ;;
   *) echo "unknown platform: $platform" >&2; exit 2 ;;
 esac
 
 name="onnxruntime-$platform-$ORT_VERSION"
-ext=tgz; [ "$platform" = win-x64 ] && ext=zip
+ext=tgz; case "$platform" in win-*) ext=zip ;; esac
 url="https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/$name.$ext"
 mkdir -p "$out"
 tgz="$out/$name.$ext"

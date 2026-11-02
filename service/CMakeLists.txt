@@ -30,6 +30,7 @@ set(SRC_TTS ${SRC}/tts)
 include_directories(${SRC_COMMON} ${SRC_DICTATION} ${SRC_TTS})
 set(COMMON_SOURCES
   ${SRC_COMMON}/audio.cpp
+  ${SRC_COMMON}/handoff.cpp
   ${SRC_DICTATION}/engine.cpp
   ${SRC_TTS}/light.cpp
   ${SRC_TTS}/nakdan.cpp
@@ -97,4 +98,25 @@ else()
     target_link_options(otzaria-voice PRIVATE -static-libstdc++ -static-libgcc)
     set_target_properties(otzaria-voice PROPERTIES INSTALL_RPATH "$ORIGIN")
   endif()
+endif()
+
+# Unit tests (ctest -C Release): not part of the program that ships.
+enable_testing()
+add_executable(otzaria-voice-tests tests/handoff_test.cpp ${SRC_COMMON}/handoff.cpp)
+if(MSVC)
+  set_property(TARGET otzaria-voice-tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  target_compile_options(otzaria-voice-tests PRIVATE /utf-8 /W3 /EHsc)
+endif()
+add_test(NAME handoff COMMAND otzaria-voice-tests)
+if(WIN32)
+  add_executable(otzaria-voice-pack-tests tests/pack_test.cpp
+    ${SRC_COMMON}/pack_win.cpp ${SRC_COMMON}/platform.cpp ${SRC_COMMON}/util.cpp)
+  target_compile_definitions(otzaria-voice-pack-tests PRIVATE UNICODE _UNICODE)
+  target_compile_features(otzaria-voice-pack-tests PRIVATE cxx_std_20)
+  target_link_libraries(otzaria-voice-pack-tests PRIVATE winhttp bcrypt advapi32 psapi)
+  if(MSVC)
+    set_property(TARGET otzaria-voice-pack-tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    target_compile_options(otzaria-voice-pack-tests PRIVATE /utf-8 /W3 /EHsc)
+  endif()
+  add_test(NAME pack COMMAND otzaria-voice-pack-tests)
 endif()

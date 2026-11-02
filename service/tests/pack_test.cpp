@@ -1,0 +1,146 @@
+// Tests of pack::sys::extract on Windows (pack_win.cpp): a zip unpacks into a
+// folder whose path has letters outside the ANSI code page, as under a user
+// profile named in Hebrew on a machine set to English (P-12).
+//
+//   ctest -C Release   (or run otzaria-voice-pack-tests; exit code 0 = passed)
+#define _CRT_SECURE_NO_WARNINGS
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
+#include "pack.h"
+
+namespace fs = std::filesystem;
+
+static int failures = 0;
+
+#define CHECK(cond)                                              \
+  do {                                                           \
+    if (!(cond)) {                                               \
+      std::fprintf(stderr, "FAILED line %d: %s\n", __LINE__, #cond); \
+      failures++;                                                \
+    }                                                            \
+  } while (0)
+
+// a.txt ("alef\n") and d/b.txt ("bet\n"), made with tar -a -cf.
+static const unsigned char kZip[] = {
+    0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x87, 0x53, 0x62, 0x5d, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x20, 0x00, 0x61, 0x2e,
+    0x74, 0x78, 0x74, 0x75, 0x78, 0x0b, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
+    0x00, 0x00, 0x55, 0x54, 0x0d, 0x00, 0x07, 0x9e, 0x49, 0xe8, 0x6a, 0x9e, 0x49, 0xe8, 0x6a, 0x9e,
+    0x49, 0xe8, 0x6a, 0x4b, 0xcc, 0x49, 0x4d, 0xe3, 0x02, 0x00, 0x50, 0x4b, 0x07, 0x08, 0xaf, 0xcd,
+    0xee, 0x8e, 0x07, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00,
+    0x08, 0x00, 0x08, 0x00, 0x87, 0x53, 0x62, 0x5d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x20, 0x00, 0x64, 0x2f, 0x62, 0x2e, 0x74, 0x78, 0x74, 0x75,
+    0x78, 0x0b, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x55, 0x54,
+    0x0d, 0x00, 0x07, 0x9e, 0x49, 0xe8, 0x6a, 0x9e, 0x49, 0xe8, 0x6a, 0x9e, 0x49, 0xe8, 0x6a, 0x4b,
+    0x4a, 0x2d, 0xe1, 0x02, 0x00, 0x50, 0x4b, 0x07, 0x08, 0xb3, 0xbc, 0xf1, 0x55, 0x06, 0x00, 0x00,
+    0x00, 0x04, 0x00, 0x00, 0x00, 0x50, 0x4b, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x08,
+    0x00, 0x87, 0x53, 0x62, 0x5d, 0xaf, 0xcd, 0xee, 0x8e, 0x07, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00,
+    0x00, 0x05, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb6, 0x81, 0x00,
+    0x00, 0x00, 0x00, 0x61, 0x2e, 0x74, 0x78, 0x74, 0x75, 0x78, 0x0b, 0x00, 0x01, 0x04, 0x00, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x55, 0x54, 0x05, 0x00, 0x01, 0x9e, 0x49, 0xe8, 0x6a,
+    0x50, 0x4b, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x87, 0x53, 0x62, 0x5d,
+    0xb3, 0xbc, 0xf1, 0x55, 0x06, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x07, 0x00, 0x18, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb6, 0x81, 0x5a, 0x00, 0x00, 0x00, 0x64, 0x2f,
+    0x62, 0x2e, 0x74, 0x78, 0x74, 0x75, 0x78, 0x0b, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x04,
+    0x00, 0x00, 0x00, 0x00, 0x55, 0x54, 0x05, 0x00, 0x01, 0x9e, 0x49, 0xe8, 0x6a, 0x50, 0x4b, 0x05,
+    0x06, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x98, 0x00, 0x00, 0x00, 0xb5, 0x00, 0x00,
+    0x00, 0x00, 0x00,
+};
+
+static std::string read(const fs::path& p) {
+  std::ifstream f(p, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(f), {});
+}
+
+static void write(const fs::path& p, const void* data, size_t n) {
+  std::ofstream f(p, std::ios::binary);
+  f.write(static_cast<const char*>(data), std::streamsize(n));
+}
+
+// The folders as the service lays them out: <base>\download\<name>.zip.part,
+// unpacked into <base>\pack.new. Returns extract's error, or "" on success.
+static std::string unpack(const fs::path& base, const void* zip, size_t n) {
+  fs::create_directories(base / "download");
+  fs::create_directories(base / "pack.new");
+  write(base / "download" / "voice-pack-v4.zip.part", zip, n);
+  try {
+    pack::sys::extract(base / "download" / "voice-pack-v4.zip.part", base / "pack.new");
+    return "";
+  } catch (const std::exception& e) {
+    return e.what();
+  }
+}
+
+int main() {
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  const fs::path dir = fs::path(temp) / ("otzaria-voice-pack-test-" + std::to_string(GetCurrentProcessId()));
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+  fs::create_directories(dir);
+  // platform::log writes under %LOCALAPPDATA%\OtzariaVoice: keep it off the real log.
+  SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+
+  // The bug shows only where the name is lost in the ANSI code page; a machine
+  // where it survives would pass without testing anything, so the test fails
+  // there on purpose (also with "Unicode UTF-8 for worldwide language support").
+  const std::wstring name = L"חבילה-Ж";  // חבילה-Ж
+  BOOL lost = FALSE;
+  const int converted = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, name.c_str(), int(name.size()),
+                                            nullptr, 0, nullptr, &lost);
+  std::printf("ANSI code page %u\n", GetACP());
+  if (GetACP() == CP_UTF8 || converted == 0 || !lost) {
+    std::fprintf(stderr, "this machine's code page keeps the folder name: it cannot reproduce the bug\n");
+    return 1;
+  }
+
+  // A folder whose name the code page loses.
+  {
+    const fs::path base = dir / name;
+    CHECK(!fs::exists(base / "pack.new" / "a.txt"));
+    const std::string error = unpack(base, kZip, sizeof kZip);
+    if (!error.empty()) std::fprintf(stderr, "non-ASCII folder: %s\n", error.c_str());
+    CHECK(error.empty());
+    CHECK(read(base / "pack.new" / "a.txt") == "alef\n");
+    CHECK(read(base / "pack.new" / "d" / "b.txt") == "bet\n");
+  }
+
+  // A plain folder, as before.
+  {
+    const fs::path base = dir / "plain";
+    const std::string error = unpack(base, kZip, sizeof kZip);
+    if (!error.empty()) std::fprintf(stderr, "plain folder: %s\n", error.c_str());
+    CHECK(error.empty());
+    CHECK(read(base / "pack.new" / "a.txt") == "alef\n");
+    CHECK(read(base / "pack.new" / "d" / "b.txt") == "bet\n");
+  }
+
+  // A damaged zip still fails with the message the plugin shows, and the log
+  // says what tar was given.
+  {
+    const fs::path base = dir / (name + L"-bad");
+    const std::string error = unpack(base, kZip, 40);
+    CHECK(error.rfind("פתיחת החבילה נכשלה (", 0) == 0);
+    const std::string log = read(dir / "OtzariaVoice" / "service.log");
+    CHECK(log.find("pack: tar exit ") != std::string::npos);
+    CHECK(log.find("(ANSI code page " + std::to_string(GetACP()) + ") in ") != std::string::npos);
+    CHECK(log.find("-xf \"..\\download\\voice-pack-v4.zip.part\"") != std::string::npos);
+  }
+
+  fs::remove_all(dir, ec);
+  if (failures) {
+    std::fprintf(stderr, "%d check(s) failed\n", failures);
+    return 1;
+  }
+  std::printf("pack tests passed\n");
+  return 0;
+}
