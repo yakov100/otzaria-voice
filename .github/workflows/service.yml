@@ -9,8 +9,9 @@ name: שירות הדיבור — בנייה ואריזה
 # service/src/common/service.cpp) has no GitHub Release yet, it also creates
 # Release service-v<version> with all the installers.
 #
-# The plugins fetch the installer from releases/latest/download/..., so THIS is
-# the release that must stay marked "latest". The plugin workflows
+# The plugins fetch the installer from releases/latest/download/..., and people
+# the full one (with-models.exe), so THIS is the release that must stay marked
+# "latest". The plugin workflows
 # (dictation.yml, read-aloud.yml) create their releases with --latest=false.
 #
 # A platform whose sources are missing is skipped, not failed:
@@ -930,6 +931,11 @@ jobs:
           # The ARM64 build ships inside the Windows installers only: alone,
           # started by hand, it would install itself without the x64 build.
           rm -f files/otzaria-voice-arm64.exe
+          # The full installer under a name without the version too, so that
+          # releases/latest/download/otzaria-voice-windows-x64-with-models.exe
+          # always fetches the newest. Made here, not in the Windows job, so the
+          # artifact the test jobs download stays one copy.
+          cp "files/otzaria-voice-windows-x64-with-models-${TAG#service-v}.exe" files/otzaria-voice-windows-x64-with-models.exe
           ls -l files
           (cd files && sha256sum * >SHA256SUMS.txt)
           cat >notes.md <<EOF
