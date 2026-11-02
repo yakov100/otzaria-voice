@@ -66,7 +66,8 @@ A pack folder must contain `ctc/model.int8.onnx`, `ctc/vocab.json`,
 `ctc/preprocessor.json`, `lm/library.otzlm`, `LICENSES.txt` (and optionally
 `lm/phrases.txt`, `version.txt`). Download: the zip in
 `service/src/pack.cpp` (`kRelease`), verified by SHA-256, unpacked by
-`tar.exe` (Windows), `unzip` or `bsdtar` (Linux, macOS), `java.util.zip`
+`tar.exe` (Windows; run in the target folder with the zip's relative path,
+since it reads its arguments in the ANSI code page), `unzip` or `bsdtar` (Linux, macOS), `java.util.zip`
 (Android). Linux and macOS download with the `curl` program — both must be
 installed (they are on macOS and on common desktops).
 
