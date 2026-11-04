@@ -20,5 +20,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Third-party components (ONNX Runtime, the speech model and its training data)
-are under their own licenses; see README.md and LICENSES.txt in the voice pack.
+The MIT License above covers the contents of this repository, except
+third-party code (service/third_party/), which keeps its own license. It does
+not cover the model files that the service downloads or that the installers
+include:
+  - The language model (lm/library.otzlm) and the voice "Chaim"
+    (voices/chaim.otzvoice) are under a restricted license; see
+    MODELS-LICENSE.md.
+  - The other files of each voice pack, including the speech recognition model,
+    and third-party components (ONNX Runtime, the speech models and their
+    training data) are under the licenses stated in README.md and in the pack's
+    LICENSES.txt.

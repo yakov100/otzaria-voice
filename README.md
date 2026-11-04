@@ -187,13 +187,18 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 ## רישיונות וקרדיטים
 
 - **קוד הפרויקט:** רישיון MIT, ראו [`LICENSE`](LICENSE).
+- **מודל השפה והקול "חיים":** רישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md). מותר להשתמש בהם רק
+  דרך השירות הזה, בשביל הגרסה הרשמית של אוצריא והתוספים המאושרים, או בגרסה הרשמית של אוצריא עצמה. החריגים,
+  למשל לפיתוח ולבדיקה, מפורטים ברישיון המלא.
 - **ONNX Runtime** (מנוע הרצת המודל) של Microsoft: רישיון MIT. המתקינים ל-Linux ול-macOS כוללים אותו, וב-Windows השירות משתמש בעותק של אוצריא.
 - **מודל זיהוי הדיבור:** GigaAM-He, [asfberlin/fast-hebrew-asr](https://huggingface.co/asfberlin/fast-hebrew-asr), רישיון MIT.
   הוא מבוסס על [GigaAM](https://github.com/salute-developers/GigaAM), © 2024 GigaChat Team, רישיון MIT.
-  הפרויקט המיר אותו לפורמט ONNX ודחס אותו (int8).
+  הפרויקט המיר אותו לפורמט ONNX ודחס אותו (int8). בחבילה 4 הוא גם כוונן בפרויקט, על כ-70 דקות הקלטה של דובר אחד;
+  המודל שבחבילות 3 ו-4 ברישיון MIT.
 - **נתוני האימון של המודל:** [HebDB](https://huggingface.co/datasets/SLPRL-HUJI/HebDB) של מעבדת SLP-RL באוניברסיטה העברית, רישיון CC-BY-4.0,
   ו-[ivrit-ai/crowd-transcribe-v5](https://huggingface.co/datasets/ivrit-ai/crowd-transcribe-v5).
 - **מודל השפה** (`lm/`): נבנה בפרויקט מתוך הטקסט של ספריית אוצריא (רשימת מילים וסטטיסטיקה של רצפי מילים בלבד).
+  רישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md).
 
 חבילת ההקראה בקול מוקלט (`voice-model-v1`):
 
@@ -208,7 +213,7 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
   (CC BY-SA; ניקוד התלמוד: דיקטה - המרכז הישראלי לניתוח טקסטים) ובספרים המנוקדים של ספריית אוצריא שרישיונם
   נחלת הכלל או CC BY / CC BY-SA. המילון מופץ ב-CC BY-SA 4.0 ומכיל מילים וניקודן בלבד, לא טקסט.
 - **הקול "חיים":** נגזר בפרויקט מהקלטה של אחד ממשתתפיו, בהסכמתו, לשימוש בהקראה בשירות הזה.
-  הקובץ מכיל רק את מאפייני הדובר שהמודלים צריכים, לא הקלטה.
+  הקובץ מכיל רק את מאפייני הדובר שהמודלים צריכים, לא הקלטה. רישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md).
 - **ההקראה בקול "אסף"** (בלי השירות) משתמשת בקול העברי המובנה של Windows.
 
 הנוסח המלא של הרישיונות נמצא בקובץ `LICENSES.txt` שבתוך כל חבילת קול.
