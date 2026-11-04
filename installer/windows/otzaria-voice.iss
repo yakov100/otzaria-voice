@@ -5,7 +5,8 @@
 ;
 ; Without /DPackDir the installer carries only the service; it downloads the
 ; voice pack the first time it is needed. With /DPackDir (a directory produced
-; by installer/fetch-pack.sh: the five pack files + version.txt) the pack is
+; by installer/fetch-pack.sh: the five pack files + version.txt and
+; MODELS-LICENSE.md) the pack is
 ; unpacked to %APPDATA%\otzaria\stt\pack, the directory the service reads.
 ;
 ; The service installs itself: the installer hands the exe to

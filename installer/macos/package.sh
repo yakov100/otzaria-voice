@@ -59,6 +59,11 @@ sed -e "s|@VERSION@|$version|g" "$here/Info.plist.in" >"$app/Contents/Info.plist
   cat "$root/LICENSE"
   echo
   echo "------------------------------------------------------------------"
+  echo "Restricted license: the language model and the voice \"Chaim\""
+  echo "------------------------------------------------------------------"
+  cat "$root/MODELS-LICENSE.md"
+  echo
+  echo "------------------------------------------------------------------"
   echo "ONNX Runtime (Microsoft) - bundled shared library"
   echo "------------------------------------------------------------------"
   cat "$ort/LICENSE"
