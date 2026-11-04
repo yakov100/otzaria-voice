@@ -2,6 +2,16 @@ plugins {
     id 'com.android.application'
 }
 
+// The project's permanent signing key, so that a newer APK installs over an
+// older one (Android refuses an update signed with another key). CI decodes it
+// from the repository secrets into OTZARIA_KEYSTORE (see SIGNING.md). Without it
+// (forks, local builds) the APK is signed with this machine's debug key.
+def keystorePath = System.getenv('OTZARIA_KEYSTORE')
+def keystorePassword = System.getenv('OTZARIA_KEYSTORE_PASSWORD')
+if (keystorePath && !keystorePassword) {
+    throw new GradleException('OTZARIA_KEYSTORE is set but OTZARIA_KEYSTORE_PASSWORD is not')
+}
+
 android {
     namespace 'org.otzaria.voice'
     compileSdk 35
@@ -30,9 +40,30 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePath) {
+            otzaria {
+                storeFile file(keystorePath)
+                storeType 'PKCS12'
+                storePassword keystorePassword
+                keyAlias System.getenv('OTZARIA_KEY_ALIAS') ?: 'otzaria-voice'
+                keyPassword System.getenv('OTZARIA_KEY_PASSWORD') ?: keystorePassword
+            }
+        }
+    }
+
     buildTypes {
+        // CI ships the debug build; both build types use the same key.
+        debug {
+            if (keystorePath) {
+                signingConfig signingConfigs.otzaria
+            }
+        }
         release {
             minifyEnabled false
+            if (keystorePath) {
+                signingConfig signingConfigs.otzaria
+            }
         }
     }
 
