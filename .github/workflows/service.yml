@@ -168,7 +168,7 @@ jobs:
             if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice')) { Write-Error "$variant`: no Installed-apps entry"; exit 1 }
             Write-Host "$variant`: installed, login start = $($run.OtzariaVoice)"
           }
-          foreach ($f in 'ctc\model.int8.onnx', 'ctc\vocab.json', 'ctc\preprocessor.json', 'lm\library.otzlm', 'LICENSES.txt', 'version.txt') {
+          foreach ($f in 'ctc\model.int8.onnx', 'ctc\vocab.json', 'ctc\preprocessor.json', 'lm\library.otzlm', 'LICENSES.txt', 'version.txt', 'MODELS-LICENSE.md') {
             if (-not (Test-Path "$pack\$f")) { Write-Error "voice pack: missing $f"; exit 1 }
           }
           $want = [regex]::Match((Get-Content "$env:GITHUB_WORKSPACE\service\src\common\pack.cpp" -Raw), 'kRelease = \{\s*(\d+),').Groups[1].Value
