@@ -13,7 +13,8 @@ This pack contains:
          The one-step speech decoder of Chatterbox Turbo, ONNX, int8.
   voices/chaim.otzvoice
          The voice "חיים" (Chaim): speaker conditioning derived by the
-         Otzaria project from a recording of its contributor.
+         Otzaria project from a recording of its contributor. Restricted
+         license (section 4).
   nikud_lexicon.bin (a separate small download, placed in the pack)
          How words of Talmudic Hebrew and Aramaic are vocalized, counted
          from vocalized texts (section 5).
@@ -91,6 +92,14 @@ Derived by the Otzaria project, with the speech encoder of Chatterbox
 Multilingual, from a recording of the project's contributor, who agreed to
 its use for reading text aloud with this service. It holds no audio, only
 the speaker conditioning the models need.
+
+License: restricted. It may be used only through the Otzaria voice service,
+for the official Otzaria release and the approved plugins, or in the official
+Otzaria release itself; the full terms list the exceptions. Using it in other
+software, or using it to produce speech in this voice elsewhere, is not
+permitted without written permission. Audio files that the service creates in
+this voice are for personal use only. Full terms (the Hebrew text governs):
+https://github.com/yakov100/otzaria-voice/blob/main/MODELS-LICENSE.md
 
 
 5. The nikud lexicon (nikud_lexicon.bin)
