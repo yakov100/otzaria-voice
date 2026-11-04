@@ -2,7 +2,8 @@
 # Downloads the Hebrew voice pack (models) from this repository's dedicated
 # GitHub Release, verifies its size and SHA-256, and unpacks it into a pack
 # directory in the exact layout the service expects (the five pack files plus
-# version.txt).
+# version.txt), with MODELS-LICENSE.md beside them: the installers that carry
+# the pack carry the terms of its restricted files with it.
 #
 #   fetch-pack.sh <cache-dir> <out-dir>
 #
@@ -56,4 +57,5 @@ for f in "${PACK_FILES[@]}"; do
   [ -f "$out/$f" ] || { echo "voice pack: missing $f" >&2; exit 1; }
 done
 printf '%s' "$PACK_VERSION" >"$out/version.txt"
+cp "$(dirname "$0")/../MODELS-LICENSE.md" "$out/MODELS-LICENSE.md"
 echo "voice pack: unpacked to $out"

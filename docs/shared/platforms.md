@@ -64,7 +64,8 @@ library), `OTZARIA_VOICE_PACK_URL`, `OTZARIA_VOICE_TEST_WAV` (testing: plays a
 
 A pack folder must contain `ctc/model.int8.onnx`, `ctc/vocab.json`,
 `ctc/preprocessor.json`, `lm/library.otzlm`, `LICENSES.txt` (and optionally
-`lm/phrases.txt`, `version.txt`). Download: the zip in
+`lm/phrases.txt`, `version.txt`, and `MODELS-LICENSE.md`, which the installers
+that carry the pack add). Download: the zip in
 `service/src/pack.cpp` (`kRelease`), verified by SHA-256, unpacked by
 `tar.exe` (Windows; run in the target folder with the zip's relative path,
 since it reads its arguments in the ANSI code page), `unzip` or `bsdtar` (Linux, macOS), `java.util.zip`

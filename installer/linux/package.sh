@@ -69,6 +69,11 @@ notices() {
     cat "$root/LICENSE"
     echo
     echo "------------------------------------------------------------------"
+    echo "Restricted license: the language model and the voice \"Chaim\""
+    echo "------------------------------------------------------------------"
+    cat "$root/MODELS-LICENSE.md"
+    echo
+    echo "------------------------------------------------------------------"
     echo "ONNX Runtime $(basename "$ort" | sed 's/.*-//') (Microsoft) - bundled shared library"
     echo "------------------------------------------------------------------"
     cat "$ort/LICENSE"

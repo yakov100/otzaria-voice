@@ -27,6 +27,8 @@ on:
       - 'service/**'
       - 'installer/**'
       - '.github/workflows/service.yml'
+      - 'LICENSE'
+      - 'MODELS-LICENSE.md'
   workflow_dispatch:
 
 permissions:
@@ -198,6 +200,10 @@ jobs:
           path: out/otzaria-voice-windows-x64-with-models-*.exe
           compression-level: 0
           if-no-files-found: error
+          # The voice pack's language model and voice may not be distributed
+          # outside this repository (MODELS-LICENSE.md): in a fork the
+          # installers that carry them live one day, enough for the tests.
+          retention-days: ${{ github.repository != 'yakov100/otzaria-voice' && 1 || 0 }}
       - name: העלאה — בלי מודלים
         uses: actions/upload-artifact@v7
         with:
@@ -715,6 +721,7 @@ jobs:
           path: out/with-models/*
           compression-level: 0
           if-no-files-found: error
+          retention-days: ${{ github.repository != 'yakov100/otzaria-voice' && 1 || 0 }}  # see windows
       - name: העלאה — בלי מודלים
         uses: actions/upload-artifact@v7
         with:
@@ -790,6 +797,7 @@ jobs:
           path: out/with-models/*.pkg
           compression-level: 0
           if-no-files-found: error
+          retention-days: ${{ github.repository != 'yakov100/otzaria-voice' && 1 || 0 }}  # see windows
       - name: העלאה — בלי מודלים
         uses: actions/upload-artifact@v7
         with:
@@ -857,6 +865,7 @@ jobs:
           path: out/otzaria-voice-android-with-models-*.apk
           compression-level: 0
           if-no-files-found: error
+          retention-days: ${{ github.repository != 'yakov100/otzaria-voice' && 1 || 0 }}  # see windows
       - name: העלאה — בלי מודלים
         uses: actions/upload-artifact@v7
         with:
@@ -895,7 +904,11 @@ jobs:
   release:
     name: GitHub Release (שירות)
     needs: [detect, windows-arm64-build, windows, windows-no-vcredist, windows-arm64-test, linux, macos, android, android-test]
+    # Only in this repository: a fork's release would distribute the voice
+    # pack's restricted files (MODELS-LICENSE.md). If the repository is moved
+    # or renamed, update its name here and in the retention-days lines.
     if: >-
+      github.repository == 'yakov100/otzaria-voice' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       !cancelled() && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
