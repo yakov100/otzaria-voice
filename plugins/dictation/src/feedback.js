@@ -366,8 +366,9 @@ const SERVICE_UPDATE_ASK_AGAIN_MS = 14 * 24 * 3600 * 1000;
 
 /**
  * The installed voice service is older than SERVICE_UPDATE_BELOW(_WINDOWS). It is asked once per
- * LATEST_SERVICE and again after two weeks whether to get the new installer; the old service keeps
- * working either way. True when the installer came down or the page opened, so the dictation waits.
+ * LATEST_SERVICE and again after two weeks whether to get the new installer. "Not now" keeps the old
+ * service, which works unless it is one that meets "cannot load" (the dialog says so). True when the
+ * installer came down or the page opened, so the dictation waits.
  */
 async function offerServiceUpdate(st) {
   const platform = st.platform || platformName;
@@ -405,7 +406,7 @@ async function offerServiceUpdate(st) {
         ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (' + SMALL_INSTALLER_SIZE + ') לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
         : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
       (cannotLoadFix
-        ? 'אם מופיעה אצלכם השגיאה הזו, צריך לעדכן כדי שההכתבה תעבוד. אם ההכתבה עובדת, לא חייבים: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n'
+        ? 'אם מופיעה אצלכם השגיאה «cannot load», צריך לעדכן כדי שההכתבה תעבוד. אם ההכתבה עובדת, לא חייבים: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n'
         : 'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n') +
       (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
   );

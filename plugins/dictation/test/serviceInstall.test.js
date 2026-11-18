@@ -376,6 +376,16 @@ async function test(name, fn) {
     assert.ok(messages(calls).some(m => m.includes('עדיין יורדת')), JSON.stringify(messages(calls)));
   });
 
+  await test('raising LATEST_SERVICE is a decision about the thresholds too', () => {
+    const src = fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8');
+    const read = (name) => new RegExp('const ' + name + " = '([^']+)'").exec(src)[1];
+    const now = [read('LATEST_SERVICE'), read('SERVICE_UPDATE_BELOW_WINDOWS'), read('SERVICE_UPDATE_BELOW')];
+    // When this fails: decide who should be offered the new service (SERVICE_UPDATE_BELOW*), add its
+    // news to offerServiceUpdate for them, and only then update this line.
+    assert.deepStrictEqual(now, ['2.5.3', '2.5.2', '2.5.1'],
+      'LATEST_SERVICE or a threshold changed: decide the thresholds and the news, then update this test');
+  });
+
   await test('the latest service: no update is offered', async () => {
     const latest = /const LATEST_SERVICE = '([^']+)'/.exec(fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8'))[1];
     const calls = await press('windows', {
