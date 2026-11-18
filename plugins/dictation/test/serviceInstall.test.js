@@ -192,7 +192,7 @@ async function test(name, fn) {
     }
   });
 
-  const ANSWERING = { service: 'otzaria-voice', version: '2.5.1', platform: 'windows', runtime: true, pack: false };
+  const ANSWERING = { service: 'otzaria-voice', version: '2.5.3', platform: 'windows', runtime: true, pack: false };
 
   await test('the service answers, then stops answering: the small installer, in the same engine and in a new one', async () => {
     let up = true;
@@ -308,14 +308,14 @@ async function test(name, fn) {
   const UPDATE_TITLE = 'עדכון לשירות הדיבור';
   const updateAsk = (calls) => of(calls, 'ui.showConfirm').map(c => c.payload).filter(p => p.title === UPDATE_TITLE);
 
-  await test('Windows, service 2.5.0: the update is offered with the accuracy news only', async () => {
+  await test('Windows, service 2.5.0: the update carries the "cannot load" fix and the accuracy news, not the 2.5.0 news', async () => {
     const calls = await press('windows', {
       status: { service: 'otzaria-voice', version: '2.5.0', platform: 'windows', runtime: true, pack: true },
       download: { success: true, data: { path: SAVED } }
     });
     const ask = updateAsk(calls);
     assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
-    assert.ok(ask[0].content.includes('מדויקת יותר'), ask[0].content);
+    assert.ok(ask[0].content.includes('מדויקת יותר') && ask[0].content.includes('cannot load'), ask[0].content);
     assert.ok(!ask[0].content.includes('Ctrl+Alt+M'), 'a 2.5.0 service was told the 2.5.0 news: ' + ask[0].content);
   });
 
@@ -327,6 +327,53 @@ async function test(name, fn) {
     const ask = updateAsk(calls);
     assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
     assert.ok(ask[0].content.includes('מדויקת יותר') && ask[0].content.includes('Ctrl+Alt+M'), ask[0].content);
+  });
+
+  const serviceAt = (version, platform) => ({ service: 'otzaria-voice', version, platform, runtime: true, pack: true });
+
+  await test('Windows, service 2.5.1: the update is offered for the "cannot load" fix, without the accuracy news', async () => {
+    const calls = await press('windows', { status: serviceAt('2.5.1', 'windows'), download: { success: true, data: { path: SAVED } } });
+    const ask = updateAsk(calls);
+    assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
+    assert.ok(ask[0].content.includes('cannot load') && ask[0].content.includes('Windows 11 עם מעבד ARM'), ask[0].content);
+    assert.ok(ask[0].content.includes('צריך לעדכן כדי שההכתבה תעבוד'), 'a user with the error is told "not needed": ' + ask[0].content);
+    assert.ok(!ask[0].content.includes('מדויקת יותר'), 'a 2.5.1 service was told the 2.5.1 news: ' + ask[0].content);
+    const dl = of(calls, 'network.download');
+    assert.strictEqual(dl.length === 1 && dl[0].payload.url, INSTALLER, JSON.stringify(dl.map(c => c.payload.url)));
+  });
+
+  await test('Windows, service 2.5.2: it has the fix, so no update is offered', async () => {
+    const calls = await press('windows', { status: serviceAt('2.5.2', 'windows') });
+    assert.strictEqual(updateAsk(calls).length, 0, 'an update was offered to 2.5.2');
+  });
+
+  await test('Linux, service 2.5.1: no update (the fix is for Windows); 2.5.0: the accuracy news, no "cannot load"', async () => {
+    const at251 = await press('linux', { status: serviceAt('2.5.1', 'linux') });
+    assert.strictEqual(updateAsk(at251).length, 0, 'an update was offered to a Linux 2.5.1');
+    const at250 = await press('linux', { status: serviceAt('2.5.0', 'linux') });
+    const ask = updateAsk(at250);
+    assert.strictEqual(ask.length, 1, 'update offers: ' + ask.length);
+    assert.ok(ask[0].content.includes('מדויקת יותר') && !ask[0].content.includes('cannot load'), ask[0].content);
+    assert.strictEqual(of(at250, 'network.download').length, 0, 'downloaded on Linux');
+    assert.strictEqual(of(at250, 'app.openUrl').length, 1, 'the page did not open');
+  });
+
+  await test('every platform: just below its threshold an update with news is offered, at it none', async () => {
+    for (const [platform, below, at] of [['windows', '2.5.1', '2.5.2'], ['android', '2.5.0', '2.5.1'], ['macos', '2.5.0', '2.5.1'], ['linux', '2.5.0', '2.5.1'], ['', '2.5.0', '2.5.1']]) {
+      const offered = updateAsk(await press(platform, { status: serviceAt(below, platform), download: { success: true, data: { path: SAVED } } }));
+      assert.strictEqual(offered.length, 1, platform + ' ' + below + ': offers ' + offered.length);
+      assert.ok(offered[0].content.includes('cannot load') || offered[0].content.includes('מדויקת יותר'), platform + ' ' + below + ': no news: ' + offered[0].content);
+      assert.strictEqual(updateAsk(await press(platform, { status: serviceAt(at, platform) })).length, 0, platform + ' ' + at + ': offered');
+    }
+  });
+
+  await test('Windows, service 2.5.1 while its voice pack downloads: no update now (it would cut the download short)', async () => {
+    const st = { ...serviceAt('2.5.1', 'windows'), pack: false, packJob: { state: 'downloading', received: 1, total: 2 } };
+    // watchPack would poll forever against a pack that never finishes: its timer is not run here.
+    const timers = { setInterval: () => 1, clearInterval: () => {} };
+    const calls = await press('windows', { status: st, timers });
+    assert.strictEqual(updateAsk(calls).length, 0, 'an update was offered during the pack download');
+    assert.ok(messages(calls).some(m => m.includes('עדיין יורדת')), JSON.stringify(messages(calls)));
   });
 
   await test('the latest service: no update is offered', async () => {

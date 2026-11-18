@@ -35,9 +35,16 @@ const SERVICE_SEEN_SIGNS = [SERVICE_SEEN_KEY, 'serviceUpdateDeclined', 'packUpda
 // Otzaria would save as "... (1).exe").
 const FULL_INSTALLER_SAVED_KEY = 'fullInstallerSaved';
 const FULL_INSTALLER_KEEP_MS = 24 * 3600 * 1000;
-// The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). The
-// store updates the plugin but not the service, so an older one is offered the download page.
-const LATEST_SERVICE = '2.5.1';
+// The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). It
+// keys the user's "not now" (one per version), and does NOT decide who is asked: that is
+// SERVICE_UPDATE_BELOW(_WINDOWS). A plugin for a newer service raises both, and adds its news.
+const LATEST_SERVICE = '2.5.3';
+// Only a service older than these is offered the update. On Windows 2.5.2 fixed "cannot load
+// ...onnxruntime.dll" (Visual C++ next to otzaria.exe; Windows 11 on ARM); elsewhere the last change
+// users notice is 2.5.1 (final beam 48). 2.5.3 added only the models license and a fixed link, so
+// a 2.5.2 is not asked.
+const SERVICE_UPDATE_BELOW_WINDOWS = '2.5.2';
+const SERVICE_UPDATE_BELOW = '2.5.1';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {
@@ -358,25 +365,38 @@ function versionOlder(a, b) {
 const SERVICE_UPDATE_ASK_AGAIN_MS = 14 * 24 * 3600 * 1000;
 
 /**
- * The installed voice service is older than LATEST_SERVICE. It is asked once per version and again
- * after two weeks whether to open the download page; the old service keeps working either way.
- * True when the page was opened, so the dictation waits for the installation.
+ * The installed voice service is older than SERVICE_UPDATE_BELOW(_WINDOWS). It is asked once per
+ * LATEST_SERVICE and again after two weeks whether to get the new installer; the old service keeps
+ * working either way. True when the installer came down or the page opened, so the dictation waits.
  */
 async function offerServiceUpdate(st) {
-  if (!st.version || !versionOlder(st.version, LATEST_SERVICE)) return false;
+  const platform = st.platform || platformName;
+  const windows = platform === 'windows';
+  if (!st.version || !versionOlder(st.version, windows ? SERVICE_UPDATE_BELOW_WINDOWS : SERVICE_UPDATE_BELOW)) return false;
+  // Installing now would cut a voice pack download short; the update waits for the next press.
+  if (PACK_BUSY.includes(st.packJob && st.packJob.state)) return false;
   const key = 'serviceUpdateDeclined';
   try {
     const saved = await Otzaria.call('storage.get', { key });
     const [version, at] = String((saved && saved.success && saved.data) || '').split(':');
     if (version === LATEST_SERVICE && Date.now() - Number(at) < SERVICE_UPDATE_ASK_AGAIN_MS) return false;
   } catch (_) {}
-  const platform = st.platform || platformName;
-  const windows = platform === 'windows';
+  // Each part of the news goes only to a service that lacks it.
+  const cannotLoadFix = windows && versionOlder(st.version, '2.5.2');
+  const before251 = versionOlder(st.version, '2.5.1');
   // A service older than 2.5.0 also gets the 2.5.0 news (speed, and the end of typing into other programs).
   const before250 = versionOlder(st.version, '2.5.0');
   const ok = await ask(
     'עדכון לשירות הדיבור',
-    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מדויקת יותר: בבדיקות שלנו (על הקלטות של דובר אחד) היא טועה בכ-18% פחות מילים.\n' +
+    // No version number: the installer comes from the latest release, which may be newer than
+    // LATEST_SERVICE by the time a user sees this.
+    'יצאה גרסה חדשה של שירות הדיבור.\n' +
+      (cannotLoadFix
+        ? 'היא מתקנת את השגיאה «cannot load … onnxruntime.dll» שהופיעה במחשבים בלי רכיבי Visual C++, ומוסיפה תמיכה ב-Windows 11 עם מעבד ARM.\n'
+        : '') +
+      (before251
+        ? 'ההכתבה בה מדויקת יותר: בבדיקות שלנו (על הקלטות של דובר אחד) היא טועה בכ-18% פחות מילים.\n'
+        : '') +
       (before250
         ? 'היא גם מהירה יותר מהגרסה שמותקנת אצלך: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
           'שימו לב: הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n'
@@ -384,7 +404,9 @@ async function offerServiceUpdate(st) {
       (windows
         ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (' + SMALL_INSTALLER_SIZE + ') לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
         : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
-      'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
+      (cannotLoadFix
+        ? 'אם מופיעה אצלכם השגיאה הזו, צריך לעדכן כדי שההכתבה תעבוד. אם ההכתבה עובדת, לא חייבים: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n'
+        : 'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n') +
       (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
   );
   try {
