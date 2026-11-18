@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PACK_CACHE_KEY: voice-pack-v4-6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048
+  PACK_CACHE_KEY: voice-pack-v5-be7a546f67fb8c90d5db9ac3fee940c43854b1e322809499bd3fee46c07c0ef7
 
 jobs:
   detect:

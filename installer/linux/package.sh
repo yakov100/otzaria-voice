@@ -69,7 +69,7 @@ notices() {
     cat "$root/LICENSE"
     echo
     echo "------------------------------------------------------------------"
-    echo "Restricted license: the language model and the voice \"Chaim\""
+    echo "Restricted license: the language model, the speech model of voice pack 5 and the voice \"Chaim\""
     echo "------------------------------------------------------------------"
     cat "$root/MODELS-LICENSE.md"
     echo

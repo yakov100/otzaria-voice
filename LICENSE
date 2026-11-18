@@ -24,10 +24,12 @@ The MIT License above covers the contents of this repository, except
 third-party code (service/third_party/), which keeps its own license. It does
 not cover the model files that the service downloads or that the installers
 include:
-  - The language model (lm/library.otzlm) and the voice "Chaim"
+  - The language model (lm/library.otzlm), the speech recognition model of
+    voice pack 5 (ctc/model.int8.onnx in voice-pack-v5) and the voice "Chaim"
     (voices/chaim.otzvoice) are under a restricted license; see
     MODELS-LICENSE.md.
-  - The other files of each voice pack, including the speech recognition model,
+  - The other files of each voice pack, including the speech recognition model
+    of voice packs 3 and 4,
     and third-party components (ONNX Runtime, the speech models and their
     training data) are under the licenses stated in README.md and in the pack's
     LICENSES.txt.
