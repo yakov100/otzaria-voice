@@ -95,5 +95,6 @@ function warmService() {
 async function serviceStatus() {
   const st = await serviceCall('/status', 'GET');
   if (!st || st.service !== 'otzaria-voice') throw new ServiceError('unreachable', 'no service');
+  noteServiceSeen(); // feedback.js: a service that stops answering later gets the small installer
   return st;
 }
