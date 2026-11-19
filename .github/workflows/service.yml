@@ -40,6 +40,11 @@ concurrency:
 
 env:
   PACK_CACHE_KEY: voice-pack-v5-be7a546f67fb8c90d5db9ac3fee940c43854b1e322809499bd3fee46c07c0ef7
+  # ONNX Runtime 1.28.0 comes from Microsoft's NuGet package (installer/fetch-ort.sh,
+  # which pins its SHA-256 and checks a cached copy against it before every use,
+  # downloading it from nuget.org if it does not match). The cache key follows the
+  # script, so a change of version there also changes the key.
+  ORT_CACHE: .cache/onnxruntime
 
 jobs:
   detect:
@@ -70,9 +75,26 @@ jobs:
           [ "$cmake" = true ] || echo "::notice::אין service/CMakeLists.txt: Linux ו-macOS ידולגו."
           [ "$android" = true ] || echo "::notice::אין פרויקט Android בתיקייה service/android: בניית Android תדולג."
 
+  # The ONNX Runtime package's two signatures (Microsoft as author, nuget.org as
+  # repository) are verified here, on a runner that has dotnet. The jobs that use
+  # ONNX Runtime need this one, and accept only a package with the SHA-256 pinned
+  # in installer/fetch-ort.sh, so they use the bytes verified here.
+  ort-signature:
+    name: ONNX Runtime — אימות החתימות של חבילת NuGet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
+      - name: אימות החתימות
+        run: ORT_VERIFY_SIGNATURE=1 bash installer/fetch-ort.sh linux-x64 "$RUNNER_TEMP/ort" >/dev/null
+
   windows:
     name: Windows x64
-    needs: [detect, windows-arm64-build]
+    needs: [detect, ort-signature, windows-arm64-build]
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.detect.outputs.version }}
@@ -100,6 +122,11 @@ jobs:
           name: otzaria-voice-windows-arm64-exe
           path: dist
 
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       # Only for the smoke test: on users' machines the service uses Otzaria's copy.
       - name: ONNX Runtime (לבדיקה בלבד)
         shell: bash
@@ -219,7 +246,7 @@ jobs:
   # released 2.5.1 must fail there, and this build must dictate.
   windows-no-vcredist:
     name: Windows x64 — בלי Visual C++ במערכת
-    needs: [detect, windows]
+    needs: [detect, ort-signature, windows]
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -232,6 +259,11 @@ jobs:
           name: otzaria-voice-windows-x64-with-models
           path: setup
 
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       - name: ONNX Runtime ו-Visual C++ בפריסה של אוצריא
         shell: bash
         run: |
@@ -368,7 +400,7 @@ jobs:
   # of the service is made here, natively, and rides in the x64 job's installers.
   windows-arm64-build:
     name: Windows ARM64 — בנייה
-    needs: detect
+    needs: [detect, ort-signature]
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
@@ -390,6 +422,11 @@ jobs:
           Get-Item dist/otzaria-voice-arm64.exe | Format-List Name, Length
           python -I installer/ci/pe-imports.py dist/otzaria-voice-arm64.exe | Select-Object -First 1
 
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       # Only for the tests: on users' machines the service uses Otzaria's copy.
       - name: ONNX Runtime ל-ARM64 (לבדיקה בלבד)
         shell: bash
@@ -430,7 +467,7 @@ jobs:
   # Visual C++ runtime of the same processor next to it, as Otzaria ships them).
   windows-arm64-test:
     name: Windows ARM64 — התקנה והחלפת גרסה
-    needs: [detect, windows]
+    needs: [detect, ort-signature, windows]
     runs-on: windows-11-arm
     timeout-minutes: 40
     env:
@@ -465,6 +502,11 @@ jobs:
             Write-Host "$arch runtime from $($from[$arch]):"
             Get-ChildItem $dst -File | ForEach-Object { "  $($_.Name) $($_.VersionInfo.FileVersion)" }
           }
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       - name: ONNX Runtime לשני המעבדים
         shell: bash
         run: |
@@ -642,7 +684,7 @@ jobs:
 
   linux:
     name: Linux ${{ matrix.arch }}
-    needs: detect
+    needs: [detect, ort-signature]
     if: needs.detect.outputs.cmake == 'true'
     strategy:
       fail-fast: false
@@ -670,8 +712,15 @@ jobs:
           file dist/otzaria-voice
           dist/otzaria-voice --version
 
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       - name: ONNX Runtime
-        run: echo "ORT_DIR=$(bash installer/fetch-ort.sh ${{ matrix.ort }} "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
+        run: |
+          d="$(bash installer/fetch-ort.sh ${{ matrix.ort }} "$RUNNER_TEMP/ort")"
+          echo "ORT_DIR=$d" >>"$GITHUB_ENV"
 
       - name: מטמון חבילת הקול
         uses: actions/cache@v6
@@ -731,7 +780,7 @@ jobs:
 
   macos:
     name: macOS arm64
-    needs: detect
+    needs: [detect, ort-signature]
     if: needs.detect.outputs.cmake == 'true'
     runs-on: macos-latest
     env:
@@ -749,8 +798,15 @@ jobs:
           file dist/otzaria-voice
           dist/otzaria-voice --version
 
+      - name: מטמון ONNX Runtime
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ORT_CACHE }}
+          key: onnxruntime-nuget-${{ hashFiles('installer/fetch-ort.sh') }}
       - name: ONNX Runtime
-        run: echo "ORT_DIR=$(bash installer/fetch-ort.sh osx-arm64 "$RUNNER_TEMP/ort")" >>"$GITHUB_ENV"
+        run: |
+          d="$(bash installer/fetch-ort.sh osx-arm64 "$RUNNER_TEMP/ort")"
+          echo "ORT_DIR=$d" >>"$GITHUB_ENV"
 
       - name: מטמון חבילת הקול
         uses: actions/cache@v6
@@ -903,7 +959,7 @@ jobs:
 
   release:
     name: GitHub Release (שירות)
-    needs: [detect, windows-arm64-build, windows, windows-no-vcredist, windows-arm64-test, linux, macos, android, android-test]
+    needs: [detect, ort-signature, windows-arm64-build, windows, windows-no-vcredist, windows-arm64-test, linux, macos, android, android-test]
     # Only in this repository: a fork's release would distribute the voice
     # pack's restricted files (MODELS-LICENSE.md). If the repository is moved
     # or renamed, update its name here and in the retention-days lines.
