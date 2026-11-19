@@ -30,6 +30,8 @@ Windows build and copies the result to `service\out\otzaria-voice.exe`.
 - Android: `service/android` is a Gradle project (module `app`) that builds the
   same CMakeLists.txt as `libotzaria_voice.so` through the NDK
   (`./gradlew assembleDebug` after generating a wrapper; none is committed).
+  CI signs the APKs with the project's permanent key from the repository
+  secrets (`service/android/SIGNING.md`); without them, with the debug key.
 
 ## Command line
 
