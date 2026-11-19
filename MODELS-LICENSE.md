@@ -1,6 +1,6 @@
-# רישיון שימוש מוגבל: מודל השפה והקול "חיים" של שירות הדיבור לאוצריא
+# רישיון שימוש מוגבל: מודל השפה, מודל הזיהוי של voice-pack-v5 והקול "חיים" של שירות הדיבור לאוצריא
 
-גרסה 1.0, ‏4.11.2026. © 2026 yakov100 ("בעל הזכויות").
+גרסה 1.1, ‏18.11.2026. בגרסה 1.0 (4.11.2026) לא היה פריט 3 בסעיף 1. © 2026 yakov100 ("בעל הזכויות").
 
 **בקצרה:** אם אתם משתמשים בשירות דרך אוצריא והתוספים המאושרים, אין לכם מה לעשות, רק לא להפיץ קובצי שמע בקול "חיים". אסור לקחת את הקבצים שבסעיף 1 לשימוש מחוץ לשירות ולאוצריא.
 
@@ -12,16 +12,17 @@
 
 1. **מודל השפה** (`lm/library.otzlm`) בכל חבילת קול, כולל `voice-pack-v3` ו-`voice-pack-v4`. בחבילות האלה לא נכתב לו רישיון קודם.
 2. **הקול "חיים"** (`voices/chaim.otzvoice`), כולל העותק שבחבילת ההקראה `voice-model-v1`, ועותקים וגרסאות של הקובץ הזה.
+3. **מודל זיהוי הדיבור של `voice-pack-v5`** (`ctc/model.int8.onnx` בחבילה הזו, SHA-256 ‏18a606737737bc8259ce8a63a66a6404ebc7b57744ef42281c5f8996002df06b), כולל עותקים והמרות שלו. ההגבלה חלה על כל המודל, גם על זיהוי בהגייה רגילה.
 
 ## 2. על מה הרישיון לא חל
 
 הקבצים האלה נשארים ברישיון שלהם בלבד, והרישיון הזה לא מוסיף להם שום תנאי:
 
 - התוכן של המאגר, שברישיון MIT (הקובץ [`LICENSE`](LICENSE)).
-- מודל זיהוי הדיבור (`ctc/`) שבחבילות הקול. בחבילות `voice-pack-v3` ו-`voice-pack-v4` הוא ברישיון MIT. בחבילות הבאות הוא ברישיון שכתוב בקובץ `LICENSES.txt` שלהן.
+- מודל זיהוי הדיבור (`ctc/`) שבחבילות `voice-pack-v3` ו-`voice-pack-v4`, שהוא ברישיון MIT; ושאר הקבצים בתיקייה `ctc/` של `voice-pack-v5`, שהם ברישיון MIT. בחבילות שבעל הזכויות מפרסם אחרי `voice-pack-v5`, מודל הזיהוי הוא ברישיון שכתוב בקובץ `LICENSES.txt` שלהן, גם אם הוא נגזר מהמודל שבפריט 3 בסעיף 1.
 - קבצים ברישיונות Creative Commons. למשל: רשימות הצליל (`phrases/talmud_sounds.tsv`, ‏`phrases/word_sounds.tsv`) ומילון הניקוד, שהם ב-CC BY-SA 4.0, ו-`nakdan_tokenizer.json` של דיקטה, שהוא ב-CC BY 4.0.
 - מודלים של צד שלישי שבחבילות, כמו Chatterbox ו-Phonikud, וכל קובץ אחר שקובץ `LICENSES.txt` בחבילה מייחס לו רישיון אחר.
-- הקול הקל "חיים קל" ומודלים עתידיים אחרים, חוץ ממודל השפה. הרישיון שלהם ייכתב בחבילה שלהם.
+- הקול הקל "חיים קל" ומודלים עתידיים אחרים, חוץ ממודל השפה ומהמודל שבפריט 3 בסעיף 1. הרישיון שלהם ייכתב בחבילה שלהם.
 
 ## 3. מה מותר
 
@@ -85,20 +86,21 @@
 
 ## English translation (for convenience; the Hebrew text governs)
 
-**Restricted use license: the language model and the voice "חיים" (Chaim) of the Otzaria voice service.** Version 1.0, November 4, 2026. © 2026 yakov100 (the "Owner").
+**Restricted use license: the language model, the speech recognition model of voice-pack-v5 and the voice "חיים" (Chaim) of the Otzaria voice service.** Version 1.1, November 18, 2026. Version 1.0 (November 4, 2026) had no item 1(c). © 2026 yakov100 (the "Owner").
 
 **In short:** if you use the service through Otzaria and the approved plugins, there is nothing you need to do, except not distributing audio files in the voice "חיים". The files in section 1 may not be taken for use outside the service and Otzaria.
 
 1. **Scope.** This license covers the following "Restricted Files":
    (a) the language model (`lm/library.otzlm`) in every voice pack, including `voice-pack-v3` and `voice-pack-v4`, where no license had been stated for it;
-   (b) the voice "חיים" (`voices/chaim.otzvoice`), including the copy in the reading-aloud pack `voice-model-v1`, and copies and versions of that file.
+   (b) the voice "חיים" (`voices/chaim.otzvoice`), including the copy in the reading-aloud pack `voice-model-v1`, and copies and versions of that file;
+   (c) the speech recognition model of `voice-pack-v5` (`ctc/model.int8.onnx` in that pack, SHA-256 18a606737737bc8259ce8a63a66a6404ebc7b57744ef42281c5f8996002df06b), and copies and conversions of it. The restriction covers the whole model, including recognition in plain pronunciation.
 
 2. **Not covered.** The following files stay under their own licenses only, and this license adds no terms to them:
    - the contents of the repository (MIT, see `LICENSE`);
-   - the speech recognition model (`ctc/`) in the voice packs: MIT in `voice-pack-v3` and `voice-pack-v4`, and in later packs the license stated in their `LICENSES.txt`;
+   - the speech recognition model (`ctc/`) in `voice-pack-v3` and `voice-pack-v4`, under MIT, and the other files in `ctc/` of `voice-pack-v5`, under MIT; in packs that the Owner publishes after `voice-pack-v5`, the speech recognition model is under the license stated in their `LICENSES.txt`, even if it is derived from the model in item 1(c);
    - files under Creative Commons licenses (the sound lists, the nikud lexicon, Dicta's `nakdan_tokenizer.json`);
    - third-party models (such as Chatterbox and Phonikud), and any file that a pack's `LICENSES.txt` puts under another license;
-   - the light voice and other future models, other than the language model, whose license will be stated in their own pack.
+   - the light voice and other future models, other than the language model and the model in item 1(c), whose license will be stated in their own pack.
 
 3. **Permitted use.** You may download and use the Restricted Files free of charge, only:
    (a) in the Otzaria voice service, as published by the Owner at https://github.com/yakov100/otzaria-voice, on the user's own computer or phone, including its command-line modes; requests to the service that use the Restricted Files may come only from the official Otzaria release and the approved plugins in section 4;

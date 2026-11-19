@@ -11,16 +11,16 @@
 # is re-verified before use and downloaded again if it does not match.
 set -euo pipefail
 
-PACK_URL="https://github.com/yakov100/otzaria-voice/releases/download/voice-pack-v4/otzaria-voice-he-v4.zip"
-PACK_SIZE=334195669
-PACK_SHA256="6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048"
-PACK_VERSION=4
+PACK_URL="https://github.com/yakov100/otzaria-voice/releases/download/voice-pack-v5/otzaria-voice-he-v5.zip"
+PACK_SIZE=334199960
+PACK_SHA256="be7a546f67fb8c90d5db9ac3fee940c43854b1e322809499bd3fee46c07c0ef7"
+PACK_VERSION=5
 PACK_FILES=(ctc/model.int8.onnx ctc/vocab.json ctc/preprocessor.json lm/library.otzlm LICENSES.txt)
 
 [ $# -eq 2 ] || { echo "usage: $0 <cache-dir> <out-dir>" >&2; exit 2; }
 cache="$1"
 out="$2"
-zip="$cache/otzaria-voice-he-v4.zip"
+zip="$cache/otzaria-voice-he-v5.zip"
 
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum <"$1" | cut -d' ' -f1

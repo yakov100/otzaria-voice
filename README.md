@@ -149,8 +149,9 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 חבילות הקול גדולות מדי בשביל git. הן שמורות כקבצים בגרסאות ייעודיות, ומשם השירות (ותהליך
 הבנייה) מורידים אותן. טביעת ה-SHA-256 של כל חבילה נבדקת בכל הורדה.
 
-- **הקלדה בדיבור**: [`voice-pack-v4`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-pack-v4),
-  `6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048`.
+- **הקלדה בדיבור**: [`voice-pack-v5`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-pack-v5),
+  `be7a546f67fb8c90d5db9ac3fee940c43854b1e322809499bd3fee46c07c0ef7`.
+  החבילה הקודמת, [`voice-pack-v4`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-pack-v4) (`6ae8112931042ee86889336418a111de90f73e3d5bdac5ce361e24955358f048`), נשארת זמינה.
 - **הקראה בקול מוקלט**: [`voice-model-v1`](https://github.com/yakov100/otzaria-voice/releases/tag/voice-model-v1),
   `3a757b8888699a48661bb1b43096bf5cf00035b6b23d8e3fdf4152d5b4c2af06`. נבנית מתיקיית מודלים
   עובדת בפקודה `python tools/tts/make_voice_model.py <תיקייה> <out.zip>`; קובץ קול (`.otzvoice`)
@@ -187,14 +188,15 @@ sudo "/Library/Application Support/OtzariaVoice/uninstall.sh"
 ## רישיונות וקרדיטים
 
 - **קוד הפרויקט:** רישיון MIT, ראו [`LICENSE`](LICENSE).
-- **מודל השפה והקול "חיים":** רישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md). מותר להשתמש בהם רק
+- **מודל השפה, מודל הזיהוי של חבילה 5 והקול "חיים":** רישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md). מותר להשתמש בהם רק
   דרך השירות הזה, בשביל הגרסה הרשמית של אוצריא והתוספים המאושרים, או בגרסה הרשמית של אוצריא עצמה. החריגים,
   למשל לפיתוח ולבדיקה, מפורטים ברישיון המלא.
 - **ONNX Runtime** (מנוע הרצת המודל) של Microsoft: רישיון MIT. המתקינים ל-Linux ול-macOS כוללים אותו, וב-Windows השירות משתמש בעותק של אוצריא.
 - **מודל זיהוי הדיבור:** GigaAM-He, [asfberlin/fast-hebrew-asr](https://huggingface.co/asfberlin/fast-hebrew-asr), רישיון MIT.
   הוא מבוסס על [GigaAM](https://github.com/salute-developers/GigaAM), © 2024 GigaChat Team, רישיון MIT.
-  הפרויקט המיר אותו לפורמט ONNX ודחס אותו (int8). בחבילה 4 הוא גם כוונן בפרויקט, על כ-70 דקות הקלטה של דובר אחד;
-  המודל שבחבילות 3 ו-4 ברישיון MIT.
+  הפרויקט המיר אותו לפורמט ONNX ודחס אותו (int8). בחבילות 4 ו-5 הוא גם כוונן בפרויקט.
+  המודל שבחבילות 3 ו-4 ברישיון MIT. המודל שבחבילה 5 ברישיון שימוש מוגבל, ראו [`MODELS-LICENSE.md`](MODELS-LICENSE.md).
+  טקסט הגמרא שהוקרא בחבילות 4 ו-5 הוא מ[הש"ס המנוקד של דיקטה](https://talmud.dicta.org.il) (CC BY-SA).
 - **נתוני האימון של המודל:** [HebDB](https://huggingface.co/datasets/SLPRL-HUJI/HebDB) של מעבדת SLP-RL באוניברסיטה העברית, רישיון CC-BY-4.0,
   ו-[ivrit-ai/crowd-transcribe-v5](https://huggingface.co/datasets/ivrit-ai/crowd-transcribe-v5).
 - **מודל השפה** (`lm/`): נבנה בפרויקט מתוך הטקסט של ספריית אוצריא (רשימת מילים וסטטיסטיקה של רצפי מילים בלבד).
