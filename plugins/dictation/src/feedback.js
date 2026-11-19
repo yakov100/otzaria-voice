@@ -5,15 +5,46 @@
 // confirmation dialog. Messages are plain text, never HTML.
 
 const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
-// The Windows installer of the newest service. Otzaria downloads it itself (network.download) into
-// the Downloads folder. GitHub redirects this address to releases/download/<tag>/..., and Otzaria
+// The Windows installers of the newest service. Otzaria downloads them itself (network.download) into
+// the Downloads folder. GitHub redirects these addresses to releases/download/<tag>/..., and Otzaria
 // checks every hop, so both prefixes are in the manifest's network.allowlist (and in Otzaria's
 // official allowlist, plugin_network_allowlist.txt).
+// A first installation gets the full installer, with the voice pack inside: one step, and the
+// dictation works at once, also offline. An update or a reinstall gets the small one: the pack is
+// already there, and the full installer does not replace a pack of version 3 or later anyway
+// (PackNeeded in installer/windows/otzaria-voice.iss).
+const WINDOWS_INSTALLER_FULL =
+  'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-with-models.exe';
 const WINDOWS_INSTALLER =
   'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
-// The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). The
-// store updates the plugin but not the service, so an older one is offered the download page.
-const LATEST_SERVICE = '2.5.1';
+// Their sizes in MiB, like the plugin's other sizes (megabytes()), from service 2.5.3: 328,590,957
+// and 2,830,183 bytes (313.4 and 2.7 MiB). The full one changes only with the voice pack.
+const FULL_INSTALLER_SIZE = 'כ-315 מגה-בייט';
+const SMALL_INSTALLER_SIZE = 'כ-3 מגה-בייט';
+// Otzaria reports no progress of a download, and its messages fade after a few seconds.
+const INSTALLER_REMINDER_MS = 60 * 1000;
+// Kept once the service has answered on this computer. A service that does not answer is then taken
+// as installed but not running, and gets the small installer; without it, as not installed. Plugins
+// before 2.3.4 kept the other keys only after the service answered (hotkeyTipShown: mid-October
+// plugins, when the service offered its key combination), so they count as well. Otzaria keeps a
+// plugin's storage across updates and clears it when the plugin is removed.
+const SERVICE_SEEN_KEY = 'serviceSeen';
+const SERVICE_SEEN_SIGNS = [SERVICE_SEEN_KEY, 'serviceUpdateDeclined', 'packUpdateDeclined', 'hotkeyTipShown'];
+// Where the last full installer was saved, and when ({ path, at }). A press soon after it, while the
+// service still does not answer, points to that file before offering another 315MB copy (which
+// Otzaria would save as "... (1).exe").
+const FULL_INSTALLER_SAVED_KEY = 'fullInstallerSaved';
+const FULL_INSTALLER_KEEP_MS = 24 * 3600 * 1000;
+// The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). It
+// keys the user's "not now" (one per version), and does NOT decide who is asked: that is
+// SERVICE_UPDATE_BELOW(_WINDOWS). A plugin for a newer service raises both, and adds its news.
+const LATEST_SERVICE = '2.5.3';
+// Only a service older than these is offered the update. On Windows 2.5.2 fixed "cannot load
+// ...onnxruntime.dll" (Visual C++ next to otzaria.exe; Windows 11 on ARM); elsewhere the last change
+// users notice is 2.5.1 (final beam 48). 2.5.3 added only the models license and a fixed link, so
+// a 2.5.2 is not asked.
+const SERVICE_UPDATE_BELOW_WINDOWS = '2.5.2';
+const SERVICE_UPDATE_BELOW = '2.5.1';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];
 
 function say(message) {
@@ -61,33 +92,109 @@ const caption = (() => {
   };
 })();
 
+let serviceSeen = false;
+
+/** The service answered (serviceStatus); remembered once per engine. */
+function noteServiceSeen() {
+  if (serviceSeen) return;
+  serviceSeen = true;
+  try {
+    Promise.resolve(Otzaria.call('storage.set', { key: SERVICE_SEEN_KEY, value: String(Date.now()) })).catch(() => {});
+  } catch (_) {}
+}
+
+/** True when the service has answered on this computer before (see SERVICE_SEEN_KEY). */
+async function serviceSeenBefore() {
+  if (serviceSeen) return true;
+  for (const key of SERVICE_SEEN_SIGNS) {
+    try {
+      const saved = await Otzaria.call('storage.get', { key });
+      if (saved && saved.success && saved.data) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+let installerDownload = null; // the running getInstaller, so that one download runs at a time
+let installerPhase = ''; // of the running getInstaller: 'downloading', then 'saved' (its dialog) or 'page'
+let fullInstallerSaved = null; // { path, at } of this engine's last full download
+
+/** The path of a full installer saved in the last FULL_INSTALLER_KEEP_MS, or ''. */
+async function recentFullInstaller() {
+  let v = fullInstallerSaved;
+  if (!v) {
+    try {
+      const saved = await Otzaria.call('storage.get', { key: FULL_INSTALLER_SAVED_KEY });
+      v = saved && saved.success && saved.data;
+    } catch (_) {}
+  }
+  return v && v.path && Date.now() - Number(v.at) < FULL_INSTALLER_KEEP_MS ? String(v.path) : '';
+}
+
+function rememberFullInstaller(path) {
+  fullInstallerSaved = { path, at: Date.now() };
+  try {
+    Promise.resolve(Otzaria.call('storage.set', { key: FULL_INSTALLER_SAVED_KEY, value: fullInstallerSaved })).catch(() => {});
+  } catch (_) {}
+}
+
+/** Where the installer is and how to open it. */
+function howToOpen(path, full) {
+  return 'הקובץ נשמר בתיקיית ההורדות:\n' + path + '\n\n' +
+    'פתחו אותו פעם אחת (לחיצה כפולה). אם Windows מציגה «Windows הגן על המחשב», לוחצים «מידע נוסף» ואז «הפעל בכל זאת».\n' +
+    (full ? 'חבילת הדיבור כלולה בו, ואין צורך להוריד אותה בנפרד.\n' : '') +
+    'אחרי ההתקנה לחצו שוב על המיקרופון. את הקובץ שבתיקיית ההורדות אפשר אז למחוק.';
+}
+
 /**
  * Gets the service's installer to the user from inside Otzaria. On Windows Otzaria downloads it
  * into the Downloads folder; a plugin cannot start a program, so the user opens the file once.
+ * [full]: the installer with the voice pack inside (a first installation), else the small one.
  * Elsewhere (no single installer file to fetch), or when the download fails, the download page
  * opens in the browser instead. True when the installer was downloaded or the page opened.
  */
-async function getInstaller(platform) {
+function getInstaller(platform, full) {
+  if (!installerDownload) {
+    installerDownload = fetchInstaller(platform, !!full).finally(() => {
+      installerDownload = null;
+      installerPhase = '';
+    });
+  }
+  return installerDownload;
+}
+
+async function fetchInstaller(platform, full) {
   if (platform === 'windows') {
-    say('מוריד את תוכנת ההתקנה של שירות הדיבור…');
+    say(
+      full
+        ? 'מוריד את תוכנת ההתקנה של שירות הדיבור, כולל חבילת הדיבור (' + FULL_INSTALLER_SIZE + '). ' +
+            'זה יכול לקחת כמה דקות. אפשר להמשיך לעבוד, אבל אל תסגרו את אוצריא עד שתופיע הודעה שההורדה הסתיימה.'
+        : 'מוריד את תוכנת ההתקנה של שירות הדיבור…',
+    );
+    const reminder = full
+      ? setInterval(() => say('תוכנת ההתקנה של שירות הדיבור עדיין יורדת… אל תסגרו את אוצריא'), INSTALLER_REMINDER_MS)
+      : null;
     let res = null;
+    installerPhase = 'downloading';
     try {
-      res = await Otzaria.call('network.download', { url: WINDOWS_INSTALLER });
+      res = await Otzaria.call('network.download', { url: full ? WINDOWS_INSTALLER_FULL : WINDOWS_INSTALLER });
     } catch (e) {
       res = { success: false, error: { message: String((e && e.message) || e) } };
+    } finally {
+      installerPhase = '';
+      if (reminder) clearInterval(reminder);
     }
     // Why the page opens instead (permission, allowlist, network) shows in Otzaria's log.
     if (!res || !res.success) console.warn('voice-search: installer download failed', JSON.stringify(res && res.error));
     if (res && res.success && res.data && res.data.path) {
-      await ask(
-        'תוכנת ההתקנה ירדה',
-        'הקובץ נשמר בתיקיית ההורדות:\n' + res.data.path + '\n\n' +
-          'פתחו אותו פעם אחת (לחיצה כפולה). אם Windows מציגה «Windows הגן על המחשב», לוחצים «מידע נוסף» ואז «הפעל בכל זאת».\n' +
-          'אחרי ההתקנה לחצו שוב על המיקרופון.',
-      );
+      installerPhase = 'saved';
+      if (full) rememberFullInstaller(res.data.path);
+      await ask('תוכנת ההתקנה ירדה', howToOpen(res.data.path, full));
       return true;
     }
+    say('ההורדה מתוך אוצריא לא הצליחה, ולכן נפתח דף ההורדה בדפדפן');
   }
+  installerPhase = 'page';
   const res = await Otzaria.call('app.openUrl', { url: DOWNLOAD_PAGE });
   if (res && res.success) return true;
   sayError('לא ניתן לפתוח את דף ההורדה: ' + DOWNLOAD_PAGE);
@@ -96,17 +203,46 @@ async function getInstaller(platform) {
 
 /** The service is not answering: not installed, or not started. */
 async function explainNoService(platform) {
-  const content =
-    platform === 'android'
-      ? 'הזיהוי נעשה באפליקציה קטנה בשם «שירות הדיבור של אוצריא», בלי אינטרנט.\n' +
-        'אם היא מותקנת — פתחו אותה פעם אחת ולחצו על הכפתור שבה.\n' +
-        'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה.'
-      : 'הזיהוי נעשה בתוכנה קטנה שרצה ברקע במחשב, בלי אינטרנט.\n' +
-        'אם היא מותקנת — הפעילו מחדש את המחשב, והיא תעלה מעצמה.\n' +
-        (platform === 'windows'
-          ? 'אם לא — לחצו «אישור», ואוצריא תוריד את תוכנת ההתקנה (כ-2.5 מגה-בייט) לתיקיית ההורדות. פותחים אותה פעם אחת, וזהו.'
-          : 'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה, הורידו את תוכנת ההתקנה והפעילו אותה פעם אחת.');
-  if (await ask('שירות הדיבור לא פועל', content)) await getInstaller(platform);
+  if (installerDownload) {
+    say(
+      installerPhase === 'downloading'
+        ? 'תוכנת ההתקנה של שירות הדיבור עדיין יורדת; נודיע כשהיא מוכנה. אל תסגרו את אוצריא'
+        : installerPhase === 'saved'
+          ? 'תוכנת ההתקנה של שירות הדיבור כבר ירדה לתיקיית ההורדות; פתחו אותה פעם אחת'
+          : 'סגרו קודם את ההודעה של שירות הדיבור שעל המסך',
+    );
+    return;
+  }
+  const full = platform === 'windows' && !(await serviceSeenBefore());
+  const saved = full ? await recentFullInstaller() : '';
+  let content;
+  if (saved) {
+    // The full installer came down lately and the service still does not answer: most likely the
+    // file was not opened yet.
+    content = howToOpen(saved, true) + '\n\n' +
+      'אם כבר התקנתם, הפעילו מחדש את המחשב.\n' +
+      'אם הקובץ כבר לא שם, לחצו «אישור» כדי להוריד אותו שוב (' + FULL_INSTALLER_SIZE + '). אחרת לחצו «ביטול».';
+  } else {
+    content =
+      platform === 'android'
+        ? 'הזיהוי נעשה באפליקציה קטנה בשם «שירות הדיבור של אוצריא», בלי אינטרנט.\n' +
+          'אם היא מותקנת — פתחו אותה פעם אחת ולחצו על הכפתור שבה.\n' +
+          'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה.'
+        : 'הזיהוי נעשה בתוכנה שרצה ברקע במחשב, בלי אינטרנט.\n' +
+          'אם היא מותקנת — הפעילו מחדש את המחשב, והיא תעלה מעצמה.\n' +
+          (platform !== 'windows'
+            ? 'אם לא — לחצו «אישור» כדי לפתוח את דף ההורדה, הורידו את תוכנת ההתקנה והפעילו אותה פעם אחת.'
+            : full
+              ? 'אם לא — לחצו «אישור», ואוצריא תוריד את תוכנת ההתקנה, כולל חבילת הדיבור (' + FULL_INSTALLER_SIZE +
+                '), לתיקיית ההורדות. ההורדה יכולה לקחת כמה דקות. פותחים את הקובץ פעם אחת, וזהו.'
+              : 'אם לא — לחצו «אישור», ואוצריא תוריד את תוכנת ההתקנה (' + SMALL_INSTALLER_SIZE +
+                ') לתיקיית ההורדות. פותחים את הקובץ פעם אחת, וזהו.');
+  }
+  if (!(await ask(saved ? 'תוכנת ההתקנה כבר ירדה' : 'שירות הדיבור לא פועל', content))) return;
+  // Not awaited: the full installer takes minutes, and the toolbar button or the search field must
+  // not stay busy meanwhile. Otzaria keeps the background engine alive while a call is running
+  // (isBusy in plugin_lazy_activation_service.dart).
+  getInstaller(platform, full).catch((e) => console.warn('voice-search: installer', String((e && e.message) || e)));
 }
 
 // ------------------------------------------------------------ voice pack
@@ -229,33 +365,49 @@ function versionOlder(a, b) {
 const SERVICE_UPDATE_ASK_AGAIN_MS = 14 * 24 * 3600 * 1000;
 
 /**
- * The installed voice service is older than LATEST_SERVICE. It is asked once per version and again
- * after two weeks whether to open the download page; the old service keeps working either way.
- * True when the page was opened, so the dictation waits for the installation.
+ * The installed voice service is older than SERVICE_UPDATE_BELOW(_WINDOWS). It is asked once per
+ * LATEST_SERVICE and again after two weeks whether to get the new installer. "Not now" keeps the old
+ * service, which works unless it is one that meets "cannot load" (the dialog says so). True when the
+ * installer came down or the page opened, so the dictation waits.
  */
 async function offerServiceUpdate(st) {
-  if (!st.version || !versionOlder(st.version, LATEST_SERVICE)) return false;
+  const platform = st.platform || platformName;
+  const windows = platform === 'windows';
+  if (!st.version || !versionOlder(st.version, windows ? SERVICE_UPDATE_BELOW_WINDOWS : SERVICE_UPDATE_BELOW)) return false;
+  // Installing now would cut a voice pack download short; the update waits for the next press.
+  if (PACK_BUSY.includes(st.packJob && st.packJob.state)) return false;
   const key = 'serviceUpdateDeclined';
   try {
     const saved = await Otzaria.call('storage.get', { key });
     const [version, at] = String((saved && saved.success && saved.data) || '').split(':');
     if (version === LATEST_SERVICE && Date.now() - Number(at) < SERVICE_UPDATE_ASK_AGAIN_MS) return false;
   } catch (_) {}
-  const platform = st.platform || platformName;
-  const windows = platform === 'windows';
+  // Each part of the news goes only to a service that lacks it.
+  const cannotLoadFix = windows && versionOlder(st.version, '2.5.2');
+  const before251 = versionOlder(st.version, '2.5.1');
   // A service older than 2.5.0 also gets the 2.5.0 news (speed, and the end of typing into other programs).
   const before250 = versionOlder(st.version, '2.5.0');
   const ok = await ask(
     'עדכון לשירות הדיבור',
-    'יצאה גרסה חדשה של שירות הדיבור (' + LATEST_SERVICE + '), וההכתבה בה מדויקת יותר: בבדיקות שלנו (על הקלטות של דובר אחד) היא טועה בכ-18% פחות מילים.\n' +
+    // No version number: the installer comes from the latest release, which may be newer than
+    // LATEST_SERVICE by the time a user sees this.
+    'יצאה גרסה חדשה של שירות הדיבור.\n' +
+      (cannotLoadFix
+        ? 'היא מתקנת את השגיאה «cannot load … onnxruntime.dll» שהופיעה במחשבים בלי רכיבי Visual C++, ומוסיפה תמיכה ב-Windows 11 עם מעבד ARM.\n'
+        : '') +
+      (before251
+        ? 'ההכתבה בה מדויקת יותר: בבדיקות שלנו (על הקלטות של דובר אחד) היא טועה בכ-18% פחות מילים.\n'
+        : '') +
       (before250
         ? 'היא גם מהירה יותר מהגרסה שמותקנת אצלך: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
           'שימו לב: הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n'
         : '') +
       (windows
-        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (כ-2.5 מגה-בייט) לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
+        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (' + SMALL_INSTALLER_SIZE + ') לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
         : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
-      'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n' +
+      (cannotLoadFix
+        ? 'אם מופיעה אצלכם השגיאה «cannot load», צריך לעדכן כדי שההכתבה תעבוד. אם ההכתבה עובדת, לא חייבים: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n'
+        : 'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n') +
       (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
   );
   try {
