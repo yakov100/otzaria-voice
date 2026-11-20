@@ -6,3 +6,4 @@ service/android/.gradle/
 service/android/app/build/
 service/android/app/.cxx/
 service/android/local.properties
+service/third_party/miniaudio/miniaudio.h

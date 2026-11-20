@@ -1,6 +1,8 @@
 // Otzaria voice service: local Hebrew speech recognition for Otzaria plugins.
 //
-// Listens on http://127.0.0.1:47811 only. A plugin starts dictation with
+// Listens on http://127.0.0.1:47811 only, and answers only requests whose Host
+// names this computer (hostAllowed). GET /.well-known/otzaria-service tells the
+// plugin store the installed version. A plugin starts dictation with
 // POST /dictate (network.fetchStream) and receives newline-delimited JSON while
 // the user speaks; POST /stop ends it after the last sentence is recognized.
 // POST /speak reads text aloud into an MP3 with the system voice (speech.h);
@@ -53,7 +55,8 @@
 
 namespace service {
 
-const char* kVersion = "2.5.4";
+const char* kVersion = "2.5.5";
+const char* kServiceId = "com.yaakovisrael.voice-search";
 
 namespace {
 
@@ -195,18 +198,24 @@ bool readRequest(Socket s, Request& req) {
   return true;
 }
 
-void respond(Socket s, int status, const std::string& body) {
+// [headers]: extra header lines, each ending in "\r\n".
+void respond(Socket s, int status, const std::string& body, const std::string& headers,
+             const char* contentType) {
   const char* reason = status == 200   ? "OK"
+                       : status == 204 ? "No Content"
                        : status == 403 ? "Forbidden"
                        : status == 404 ? "Not Found"
                        : status == 409 ? "Conflict"
                        : status == 501 ? "Not Implemented"
                        : status == 503 ? "Service Unavailable"
                                        : "Error";
-  sendAll(s, "HTTP/1.1 " + std::to_string(status) + " " + reason +
-                 "\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
-                 std::to_string(body.size()) +
-                 "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" + body);
+  sendAll(s, "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\nContent-Type: " +
+                 contentType + "\r\nContent-Length: " + std::to_string(body.size()) +
+                 "\r\nCache-Control: no-store\r\nConnection: close\r\n" + headers + "\r\n" + body);
+}
+
+void respond(Socket s, int status, const std::string& body) {
+  respond(s, status, body, "", "application/json; charset=utf-8");
 }
 
 std::string errorBody(const std::string& code, const std::string& message) {
@@ -628,14 +637,58 @@ bool runtimeFound() {
 #endif
 }
 
+// A web page whose name is made to resolve to 127.0.0.1 (DNS rebinding) reaches
+// this port as if it were the page's own server, but its requests still carry
+// the page's name in Host. Only the loopback names with this port pass. The
+// bare "127.0.0.1" is what services before 2.5.5 send in POST /quit (postQuit)
+// when an older installer replaces a newer service; a browser never sends it
+// to this port.
+bool hostAllowed(const Request& req) {
+  const auto it = req.headers.find("host");
+  if (it == req.headers.end()) return false;
+  std::string host = it->second;
+  for (auto& ch : host) ch = char(tolower(static_cast<unsigned char>(ch)));
+  const std::string p = ":" + std::to_string(port());
+  if (host == "127.0.0.1" + p || host == "localhost" + p || host == "[::1]" + p) return true;
+  return host == "127.0.0.1" && req.method == "POST" && req.path == "/quit";
+}
+
+// The Otzaria plugin store (otzaria.org) asks this path, from the browser,
+// whether the service is installed and which version. It reveals nothing else,
+// changes nothing, and is the only path a web page may read.
+const char* kDetectionPath = "/.well-known/otzaria-service";
+const char* kStoreOrigin = "https://otzaria.org";
+
+void detection(Socket s, const Request& req) {
+  const auto origin = req.headers.find("origin");
+  std::string headers = "Vary: Origin\r\n";
+  if (origin != req.headers.end() && origin->second == kStoreOrigin)
+    headers += std::string("Access-Control-Allow-Origin: ") + kStoreOrigin + "\r\n";
+  if (req.method == "OPTIONS") {
+    // A browser may ask first whether a public page may reach a local address.
+    respond(s, 204, "",
+            headers + "Access-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Private-Network: true\r\n",
+            "text/plain");
+    return;
+  }
+  respond(s, 200,
+          std::string("{\"protocolVersion\":1,\"serviceId\":\"") + kServiceId +
+              "\",\"serviceVersion\":\"" + kVersion + "\"}",
+          headers, "application/json");
+}
+
 void handle(Socket s) {
   setReceiveTimeout(s, 10000);
   setNoDelay(s);
   Request req;
   if (readRequest(s, req)) {
-    // Web pages always send Origin and cannot add custom headers without a
-    // preflight, which is never answered: only local programs get through.
-    if (req.headers.count("origin") || !req.headers.count("x-otzaria-voice")) {
+    if (!hostAllowed(req)) {
+      respond(s, 403, errorBody("forbidden", "the Host header must name this computer"));
+    } else if ((req.method == "GET" || req.method == "OPTIONS") && req.path == kDetectionPath) {
+      detection(s, req);
+    } else if (req.headers.count("origin") || !req.headers.count("x-otzaria-voice")) {
+      // Web pages always send Origin and cannot add custom headers without a
+      // preflight, which is never answered: only local programs get through.
       respond(s, 403, errorBody("forbidden", "requests must come from an Otzaria plugin"));
     } else if (req.method == "GET" && req.path == "/status") {
       // engineMu is held for the whole of a load (1-4 s): do not wait for it,
@@ -1145,8 +1198,8 @@ void postQuit() {
   sockaddr_in addr = loopback(port());
   if (connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0) {
     sendAll(s,
-            "POST /quit HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Otzaria-Voice: 1\r\nContent-Length: "
-            "0\r\n\r\n");
+            "POST /quit HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port()) +
+                "\r\nX-Otzaria-Voice: 1\r\nContent-Length: 0\r\n\r\n");
     char buf[256];
     recv(s, buf, sizeof buf, 0);
   }

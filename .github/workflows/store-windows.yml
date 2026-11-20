@@ -1,0 +1,279 @@
+# The Windows installer offered by the Otzaria plugin store (otzaria.org/plugins),
+# with the dictation plugin inside (installer/windows/otzaria-voice.nsi).
+#
+# The store takes an installer only with a GitHub build attestation that ties the
+# file to this repository, a commit and this workflow; its reviewer then reads
+# this workflow in full. So this file only builds: the service (x64 and ARM64,
+# from source, with Visual Studio and CMake from the runner image), the plugin
+# (Otzaria's own validator and packer), and the installer (NSIS from the runner
+# image), then attests the installer and the plugin. The service's full tests
+# stay in service.yml. The check job opens the installer the way the store does
+# (7-Zip, without running it), verifies the attestation, and installs it.
+#
+# Nothing here is downloaded except the actions and the source itself; the
+# service's ONNX Runtime is Otzaria's own copy on the user's machine.
+name: מתקין לחנות (Windows)
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'service/**'
+      - 'plugins/dictation/**'
+      - 'installer/windows/otzaria-voice.nsi'
+      - 'installer/windows/notices-he.txt'
+      - '.github/workflows/store-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: store-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin:
+    name: התוסף
+    runs-on: ubuntu-latest
+    outputs:
+      file: ${{ steps.build.outputs.plugin-file }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: חבילת התוסף
+        run: python3 plugins/dictation/build.py
+
+      # The official Otzaria action: the store's checks, and the .otzplugin.
+      - name: ולידציה ואריזה
+        id: build
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugins/dictation/packages/released
+          build: 'true'
+          publish: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-plugin
+          path: ${{ steps.build.outputs.plugin-file }}
+          if-no-files-found: error
+
+  service:
+    name: השירות (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - { arch: x64, runner: windows-latest, exe: otzaria-voice.exe }
+          - { arch: ARM64, runner: windows-11-arm, exe: otzaria-voice-arm64.exe }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # service/build.cmd: CMake and Visual Studio 2022 from the runner image.
+      - name: בנייה
+        shell: pwsh
+        env:
+          OTZARIA_VOICE_ARCH: ${{ matrix.arch }}
+        run: |
+          cmd /c service\build.cmd
+          if ($LASTEXITCODE) { exit 1 }
+          Get-Item service/out/${{ matrix.exe }} | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-service-${{ matrix.arch }}
+          path: service/out/${{ matrix.exe }}
+          if-no-files-found: error
+
+  installer:
+    name: המתקין
+    needs: [plugin, service]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      name: ${{ steps.build.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: store-*
+          path: dist
+          merge-multiple: true
+
+      - name: בנייה ב-NSIS
+        id: build
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content service/src/common/service.cpp -Raw), 'kVersion = "([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
+          if (-not $version) { Write-Error 'kVersion not found in service.cpp'; exit 1 }
+          $plugin = Get-ChildItem dist -Filter *.otzplugin
+          if (@($plugin).Count -ne 1) { Write-Error 'expected one .otzplugin'; exit 1 }
+          $makensis = Get-ChildItem "${env:ProgramFiles(x86)}\NSIS", "$env:ProgramFiles\NSIS" -Filter makensis.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $makensis) { Write-Error 'NSIS is not in the runner image'; exit 1 }
+          & $makensis.FullName /VERSION
+          $name = "otzaria-voice-windows-store-$version.exe"
+          New-Item -ItemType Directory -Force out | Out-Null
+          & $makensis.FullName /V2 "/DAppVersion=$version" "/DSourceExe=$pwd\dist\otzaria-voice.exe" `
+            "/DSourceExeArm64=$pwd\dist\otzaria-voice-arm64.exe" "/DPluginFile=$($plugin.FullName)" `
+            "/DOutFile=$pwd\out\$name" installer\windows\otzaria-voice.nsi
+          if ($LASTEXITCODE) { exit 1 }
+          Copy-Item $plugin.FullName out\
+          Get-ChildItem out | ForEach-Object { '{0}  {1}  {2}' -f (Get-FileHash $_.FullName).Hash.ToLower(), $_.Length, $_.Name }
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      # The last step that touches the files: the store compares the attested
+      # SHA-256 with the file it receives.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/*.exe
+            out/*.otzplugin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-installer
+          path: out/
+          compression-level: 0
+          if-no-files-found: error
+
+  check:
+    name: בדיקה (${{ matrix.runner }})
+    needs: installer
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: installer/ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-installer
+          path: out
+
+      # As the store does (its worker, stages/extract.js): 7-Zip lists the
+      # installer with the size of every entry, extracts it, and one of the
+      # files named plugin.otzplugin has the bytes of the plugin file.
+      - name: חילוץ התוסף ב-7-Zip
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          $z = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $z)) { Write-Error '7-Zip is not in the runner image'; exit 1 }
+          & $z | Select-Object -First 2
+          $setup = Get-Item out\*.exe
+          $list = & $z l -slt $setup.FullName
+          if ($LASTEXITCODE) { $list; Write-Error '7-Zip cannot open the installer'; exit 1 }
+          $type = ($list | Select-String '^Type = ' | Select-Object -First 1).Line
+          Write-Host $type
+          $blocks = (($list -join "`n") -split "`n`n") | Where-Object { $_ -match '(?m)^Path = ' -and $_ -notmatch '(?m)^Type = ' }
+          $noSize = $blocks | Where-Object { $_ -match '(?m)^Size = $' -or $_ -notmatch '(?m)^Size = ' }
+          if ($noSize) { $noSize; Write-Error 'entries without a size: the store refuses such an installer'; exit 1 }
+          & $z x -y -bd "-oextracted" $setup.FullName | Out-Null
+          if ($LASTEXITCODE -gt 1) { Write-Error '7-Zip could not extract the installer'; exit 1 }
+          $want = (Get-FileHash (Get-Item out\*.otzplugin).FullName).Hash
+          $found = Get-ChildItem extracted -Recurse -File -Filter plugin.otzplugin
+          $found | ForEach-Object { Write-Host "$($_.FullName.Substring((Resolve-Path extracted).Path.Length + 1))  $((Get-FileHash $_.FullName).Hash.ToLower())" }
+          if (-not ($found | Where-Object { (Get-FileHash $_.FullName).Hash -eq $want })) { Write-Error 'no plugin.otzplugin with the plugin file''s bytes'; exit 1 }
+          Write-Host "plugin.otzplugin found, the same bytes as the plugin file ($($want.ToLower()))"
+
+      - name: אימות אישור הבנייה
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($f in Get-ChildItem out -File) {
+            gh attestation verify $f.FullName --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE) { Write-Error "no valid attestation for $($f.Name)"; exit 1 }
+          }
+
+      # Otzaria is not on the runner: a stand-in handler for otzaria:// links
+      # records the link the installer opens.
+      - name: התקנה שקטה, זיהוי, Host והעברת התוסף
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $handler = "$env:RUNNER_TEMP\otzaria-handler.cmd"
+          $uriFile = "$env:RUNNER_TEMP\otzaria-uri.txt"
+          Set-Content $handler "@echo %~1> `"$uriFile`"" -Encoding ascii
+          $key = 'HKCU:\Software\Classes\otzaria'
+          New-Item "$key\shell\open\command" -Force | Out-Null
+          Set-ItemProperty $key -Name '(default)' -Value 'URL:otzaria'
+          Set-ItemProperty $key -Name 'URL Protocol' -Value ''
+          Set-ItemProperty "$key\shell\open\command" -Name '(default)' -Value "`"$handler`" `"%1`""
+
+          $setup = Get-Item out\*.exe
+          $p = Start-Process $setup.FullName -ArgumentList '/S' -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(300000)) { Write-Error 'the installer did not finish'; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "the installer exited $($p.ExitCode)"; exit 1 }
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          if (-not (Test-Path "$dir\otzaria-voice.exe")) { Write-Error 'the service was not installed'; exit 1 }
+          $arm = Test-Path "$dir\otzaria-voice-arm64.exe"
+          $native = $env:PROCESSOR_ARCHITECTURE
+          Write-Host "installed; ARM64 build: $arm; processor: $native"
+          if (($native -eq 'ARM64') -ne $arm) { Write-Error 'the ARM64 build is installed exactly on Windows on ARM'; exit 1 }
+
+          $base = 'http://127.0.0.1:47811'
+          for ($i = 0; $i -lt 30; $i++) {
+            try { $r = Invoke-WebRequest "$base/.well-known/otzaria-service" -UseBasicParsing -TimeoutSec 2; break } catch { Start-Sleep 1 }
+          }
+          if (-not $r) { Write-Error 'no answer at /.well-known/otzaria-service'; exit 1 }
+          $j = $r.Content | ConvertFrom-Json
+          $version = [regex]::Match($setup.Name, '([0-9]+\.[0-9]+\.[0-9]+)\.exe$').Groups[1].Value
+          $pluginId = 'com.yaakovisrael.voice-search'
+          if ($j.protocolVersion -ne 1 -or $j.serviceId -ne $pluginId -or $j.serviceVersion -ne $version) { Write-Error "detection answered $($r.Content)"; exit 1 }
+          if ($r.Headers['Content-Type'] -ne 'application/json') { Write-Error "Content-Type: $($r.Headers['Content-Type'])"; exit 1 }
+          Write-Host "detection: $($r.Content)"
+
+          # curl.exe: Invoke-WebRequest does not let a script set Host.
+          $h = (curl.exe -s -D - -o NUL -H 'Origin: https://otzaria.org' "$base/.well-known/otzaria-service") -join "`n"
+          if ($h -notmatch '(?im)^Access-Control-Allow-Origin: https://otzaria\.org\r?$') { $h; Write-Error 'no CORS for otzaria.org'; exit 1 }
+          $h = (curl.exe -s -D - -o NUL -H 'Origin: https://example.com' "$base/.well-known/otzaria-service") -join "`n"
+          if ($h -match '(?im)^Access-Control-Allow-Origin') { $h; Write-Error 'CORS for another site'; exit 1 }
+          $code = curl.exe -s -o NUL -w '%{http_code}' -H 'X-Otzaria-Voice: 1' "$base/status"
+          if ($code -ne '200') { Write-Error "/status with the plugin header: $code"; exit 1 }
+          foreach ($host_ in 'evil.example:47811', 'evil.example', '127.0.0.1') {
+            $code = curl.exe -s -o NUL -w '%{http_code}' -H "Host: $host_" -H 'X-Otzaria-Voice: 1' "$base/status"
+            if ($code -ne '403') { Write-Error "/status with Host $host_`: $code, not 403"; exit 1 }
+            $code = curl.exe -s -o NUL -w '%{http_code}' -H "Host: $host_" "$base/.well-known/otzaria-service"
+            if ($code -ne '403') { Write-Error "detection with Host $host_`: $code, not 403"; exit 1 }
+          }
+          $code = curl.exe -s -o NUL -w '%{http_code}' -H 'Origin: https://otzaria.org' -H 'X-Otzaria-Voice: 1' "$base/status"
+          if ($code -ne '403') { Write-Error "/status from a web page: $code, not 403"; exit 1 }
+          Write-Host 'Host and Origin checks hold'
+
+          for ($i = 0; $i -lt 20 -and -not (Test-Path $uriFile); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path $uriFile)) { Write-Error 'the installer opened no otzaria:// link'; exit 1 }
+          $uri = (Get-Content $uriFile -Raw).Trim()
+          Write-Host "link: $uri"
+          $prefix = 'otzaria://plugin/install-local?path='
+          if (-not $uri.StartsWith($prefix)) { Write-Error 'not an install-local link'; exit 1 }
+          $path = [Uri]::UnescapeDataString($uri.Substring($prefix.Length))
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Write-Error "the link names no file: $path"; exit 1 }
+          if ((Get-FileHash -LiteralPath $path).Hash -ne (Get-FileHash (Get-Item out\*.otzplugin).FullName).Hash) { Write-Error 'the delivered file is not the plugin'; exit 1 }
+          Write-Host "delivered: $path"
+          "PLUGIN_PATH=$path" >> $env:GITHUB_ENV
+
+      - name: הסרה
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Programs\OtzariaVoice"
+          $p = Start-Process "$dir\otzaria-voice.exe" -ArgumentList '--uninstall', '--quiet' -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(120000)) { Write-Error 'uninstall did not finish'; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "uninstall exited $($p.ExitCode)"; exit 1 }
+          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice') { Write-Error 'the Installed-apps entry stayed'; exit 1 }
+          if (Test-Path -LiteralPath $env:PLUGIN_PATH) { Write-Error 'the delivered plugin file stayed'; exit 1 }
+          Start-Sleep 5
+          if (Test-Path $dir) { Get-ChildItem $dir; Write-Error 'the install folder stayed'; exit 1 }
+          Write-Host 'uninstalled, the delivered plugin removed'

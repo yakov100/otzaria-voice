@@ -22,6 +22,14 @@ platform::Path installedExe();
 #ifdef _WIN32
 // This program runs from the install folder (either build, handoff.h).
 bool isInstalledCopy();
+
+// --deliver-plugin <path>: the store's installer (installer/windows/otzaria-voice.nsi)
+// has put the plugin it carries in a folder of its own under %TEMP%; this asks
+// Otzaria to install it (otzaria://plugin/install-local). Otzaria may read the
+// file only after the user agrees, so it stays; uninstall removes it.
+// Returns 0 when Otzaria was asked, 2 for a bad path, 3 when no program opens
+// otzaria:// links (Otzaria is not installed).
+int deliverPlugin(const platform::Path& plugin);
 #endif
 
 }  // namespace install

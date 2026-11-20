@@ -382,7 +382,7 @@ async function test(name, fn) {
     const now = [read('LATEST_SERVICE'), read('SERVICE_UPDATE_BELOW_WINDOWS'), read('SERVICE_UPDATE_BELOW')];
     // When this fails: decide who should be offered the new service (SERVICE_UPDATE_BELOW*), add its
     // news to offerServiceUpdate for them, and only then update this line.
-    assert.deepStrictEqual(now, ['2.5.3', '2.5.2', '2.5.1'],
+    assert.deepStrictEqual(now, ['2.5.5', '2.5.2', '2.5.1'],
       'LATEST_SERVICE or a threshold changed: decide the thresholds and the news, then update this test');
   });
 

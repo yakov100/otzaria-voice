@@ -18,6 +18,10 @@ namespace service {
 
 extern const char* kVersion;
 
+// The store's id of the plugin this service comes with ("serviceId" in
+// GET /.well-known/otzaria-service; the dictation plugin's manifest id).
+extern const char* kServiceId;
+
 int port();  // 47811, or OTZARIA_VOICE_PORT
 
 // Runs the HTTP server until POST /quit (or requestQuit). Returns the exit code.
