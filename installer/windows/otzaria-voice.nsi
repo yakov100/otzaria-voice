@@ -9,8 +9,10 @@
 ; Why NSIS and not Inno Setup (otzaria-voice.iss): the store opens every
 ; installer with 7-Zip, without running it, to find the plugin inside and
 ; compare it with the plugin file submitted next to it. 7-Zip cannot open Inno
-; Setup installers. It opens NSIS ones, and reports the size of each file only
-; when the data is compressed as one block (/SOLID), which the store requires.
+; Setup installers. It opens NSIS ones, and the store refuses an entry whose
+; size 7-Zip cannot tell before extracting. Compressed files have none (each
+; alone), and in one solid block the last file has none; stored files always
+; do. So the files are stored: the installer is about 2.6MB instead of 0.9MB.
 ;
 ; What it does is what the Inno installer does, plus the plugin:
 ;   1. The service installs itself: `otzaria-voice.exe --install --quiet` stops a
@@ -30,7 +32,8 @@
 Unicode true
 ManifestDPIAware true
 RequestExecutionLevel user
-SetCompressor /SOLID lzma
+SetCompressor lzma  ; the script header
+SetCompress off     ; the files: see above
 
 !ifndef AppVersion
   !error "Define AppVersion: /DAppVersion=X.Y.Z"
