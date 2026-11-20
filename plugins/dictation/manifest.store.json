@@ -1,7 +1,7 @@
 {
   "_comment": "The store edition (build.py \"store\"): what differs from manifest.base.json, the GitHub edition. The Otzaria plugin store takes a plugin that comes with a service only if it downloads no program, so this edition talks to the local service alone (network.localhost) and sends users to its store page for the service.",
   "id": "com.yaakovisrael.voice-search",
-  "description": "כפתור מיקרופון לחיפוש: מדברים, והטקסט נכתב בשדה החיפוש. הזיהוי נעשה במחשב, בלי אינטרנט, בשירות הדיבור שמותקן יחד עם התוסף. האינטרנט משמש רק להורדת חבילת הקול.",
+  "description": "כפתור מיקרופון לחיפוש: מדברים, והטקסט נכתב בשדה החיפוש. הזיהוי נעשה במחשב, בלי אינטרנט, בשירות הדיבור שמותקן יחד עם התוסף.",
   "permissions": [
     "app.startup_contributions",
     "app.run_on_startup",
