@@ -441,6 +441,8 @@ async function test(name, fn) {
       assert.strictEqual(asked.length, 1);
       assert.ok(asked[0].payload.content.includes('דף התוסף בחנות התוספים'), asked[0].payload.content);
       assert.ok(!asked[0].payload.content.includes('תיקיית ההורדות'), asked[0].payload.content);
+      // The store has the installer for Windows only: elsewhere the text promises none.
+      assert.strictEqual(asked[0].payload.content.includes('ל-Windows בלבד'), platform !== 'windows', asked[0].payload.content);
       assert.deepStrictEqual(of(calls, 'app.openUrl').map(c => c.payload.url), [STORE_PAGE]);
     });
   }

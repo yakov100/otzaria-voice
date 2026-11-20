@@ -42,11 +42,15 @@ function installerBusyText() {
   return 'סגרו קודם את ההודעה של שירות הדיבור שעל המסך';
 }
 
+// The store offers the service's installer for Windows only (so far): elsewhere the page is opened
+// too, but the text does not promise an installer there.
 function noServiceAsk(platform) {
   return {
     title: 'שירות הדיבור לא פועל',
     content: serviceWhere(platform) +
-      'אם לא — לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים, הורידו משם את תוכנת ההתקנה והפעילו אותה פעם אחת.',
+      (platform === 'windows'
+        ? 'אם לא — לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים, הורידו משם את תוכנת ההתקנה והפעילו אותה פעם אחת.'
+        : 'אם לא — בחנות התוספים יש כרגע תוכנת התקנה של השירות ל-Windows בלבד. לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים.'),
   };
 }
 
