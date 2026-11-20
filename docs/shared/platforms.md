@@ -17,7 +17,7 @@ Windows build and copies the result to `service\out\otzaria-voice.exe`.
 
 - Requirements: C++17 with `<filesystem>` (GCC 9+, Clang 10+, MSVC 2019+),
   CMake 3.16+. Nothing to link beyond the system: ONNX Runtime is loaded at
-  run time; miniaudio (vendored, `service/third_party/miniaudio`) loads
+  run time; miniaudio (0.11.22, fetched by CMake and pinned by SHA-256: `service/CMakeLists.txt`) loads
   PulseAudio/ALSA/JACK at run time on Linux, so no `-dev` audio packages are
   needed to build (installing them does no harm).
 - macOS links CoreFoundation, CoreAudio, AudioToolbox and embeds

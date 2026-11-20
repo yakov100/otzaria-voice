@@ -78,8 +78,9 @@ VIAddVersionKey /LANG=1037 "LegalCopyright" "https://github.com/yakov100/otzaria
 !define MUI_LICENSEPAGE_TEXT_BOTTOM "לחצו על הבא כדי להתקין."
 !insertmacro MUI_PAGE_LICENSE "notices-he.txt"
 !insertmacro MUI_PAGE_INSTFILES
+Var PluginNote  ; set by the section: what happened to the plugin
 !define MUI_FINISHPAGE_TITLE "שירות הדיבור הותקן"
-!define MUI_FINISHPAGE_TEXT "השירות פועל, ויעלה מעצמו בכל כניסה למחשב.$\r$\n$\r$\nאוצריא תבקש לאשר את התקנת התוסף $\"חיפוש בדיבור$\".$\r$\n$\r$\nלהסרת השירות: הגדרות Windows ← אפליקציות מותקנות ← $\"${AppName}$\"."
+!define MUI_FINISHPAGE_TEXT "השירות פועל, ויעלה מעצמו בכל כניסה למחשב.$\r$\n$\r$\n$PluginNote$\r$\n$\r$\nלהסרת השירות: הגדרות Windows ← אפליקציות מותקנות ← $\"${AppName}$\"."
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "Hebrew"
 
@@ -124,11 +125,17 @@ Section "Install"
   File "/oname=plugin.otzplugin" "${PluginFile}"
   SetOutPath "$PLUGINSDIR"
 
+  StrCpy $PluginNote "אוצריא תבקש לאשר את התקנת התוסף $\"חיפוש בדיבור$\"."
   ClearErrors
   ExecWait '"$PLUGINSDIR\otzaria-voice.exe" --deliver-plugin "$1\plugin.otzplugin"' $2
+  ${If} ${Errors}
+    StrCpy $2 "?"  ; the program did not start
+  ${EndIf}
   ${If} $2 == 3
-    MessageBox MB_OK|MB_ICONINFORMATION|MB_RIGHT|MB_RTLREADING "שירות הדיבור הותקן, אבל אוצריא לא נמצאה במחשב, ולכן התוסף $\"חיפוש בדיבור$\" לא הותקן.$\r$\n$\r$\nהתקינו את אוצריא (otzaria.org), ואז את התוסף מחנות התוספים. השירות כבר מוכן." /SD IDOK
-  ${ElseIf} $2 <> 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION|MB_RIGHT|MB_RTLREADING "שירות הדיבור הותקן, אבל לא הצלחנו להעביר את התוסף לאוצריא (קוד $2). אפשר להתקין אותו מחנות התוספים." /SD IDOK
+    StrCpy $PluginNote "אוצריא לא נמצאה במחשב, ולכן התוסף $\"חיפוש בדיבור$\" לא הותקן. התקינו את אוצריא (otzaria.org), ואז את התוסף מחנות התוספים. השירות כבר מוכן."
+    MessageBox MB_OK|MB_ICONINFORMATION|MB_RIGHT|MB_RTLREADING "שירות הדיבור הותקן, אבל $PluginNote" /SD IDOK
+  ${ElseIf} $2 != 0
+    StrCpy $PluginNote "לא הצלחנו להעביר את התוסף $\"חיפוש בדיבור$\" לאוצריא (קוד $2). אפשר להתקין אותו מחנות התוספים."
+    MessageBox MB_OK|MB_ICONEXCLAMATION|MB_RIGHT|MB_RTLREADING "שירות הדיבור הותקן, אבל $PluginNote" /SD IDOK
   ${EndIf}
 SectionEnd

@@ -251,6 +251,8 @@ jobs:
           }
           $code = curl.exe -s -o NUL -w '%{http_code}' -H 'Origin: https://otzaria.org' -H 'X-Otzaria-Voice: 1' "$base/status"
           if ($code -ne '403') { Write-Error "/status from a web page: $code, not 403"; exit 1 }
+          $code = curl.exe -s -o NUL -w '%{http_code}' -X POST -H 'Host: 127.0.0.1' -H 'X-Otzaria-Voice: 1' "$base/quit"
+          if ($code -ne '403') { Write-Error "/quit with a Host without the port: $code, not 403"; exit 1 }
           Write-Host 'Host and Origin checks hold'
 
           for ($i = 0; $i -lt 20 -and -not (Test-Path $uriFile); $i++) { Start-Sleep 1 }
@@ -265,6 +267,27 @@ jobs:
           Write-Host "delivered: $path"
           "PLUGIN_PATH=$path" >> $env:GITHUB_ENV
 
+          # A folder with Hebrew and a space, as under many users' names.
+          $exe = "$env:LOCALAPPDATA\Programs\OtzariaVoice\otzaria-voice.exe"
+          $odd = Join-Path $env:RUNNER_TEMP ("$([char]0x05D9)$([char]0x05E2)$([char]0x05E7)$([char]0x05D1) " + 'x')
+          New-Item -ItemType Directory -Force $odd | Out-Null
+          Copy-Item (Get-Item out\*.otzplugin).FullName "$odd\plugin.otzplugin"
+          Remove-Item $uriFile
+          $p = Start-Process $exe -ArgumentList '--deliver-plugin', "`"$odd\plugin.otzplugin`"" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { Write-Error "--deliver-plugin (Hebrew, space): exit $($p.ExitCode)"; exit 1 }
+          for ($i = 0; $i -lt 20 -and -not (Test-Path $uriFile); $i++) { Start-Sleep 1 }
+          $uri = (Get-Content $uriFile -Raw -Encoding utf8).Trim()
+          $back = [Uri]::UnescapeDataString($uri.Substring($prefix.Length))
+          if ($back -ne "$odd\plugin.otzplugin") { Write-Error "link $uri names $back, not $odd\plugin.otzplugin"; exit 1 }
+          Write-Host "Hebrew and space: $uri"
+          "ODD_PATH=$odd\plugin.otzplugin" >> $env:GITHUB_ENV
+
+          # Without Otzaria (no otzaria:// handler): exit 3, which the installer explains.
+          Remove-Item 'HKCU:\Software\Classes\otzaria' -Recurse
+          $p = Start-Process $exe -ArgumentList '--deliver-plugin', "`"$path`"" -PassThru -Wait
+          if ($p.ExitCode -ne 3) { Write-Error "--deliver-plugin without Otzaria: exit $($p.ExitCode), not 3"; exit 1 }
+          Write-Host 'without Otzaria: exit 3'
+
       - name: הסרה
         shell: pwsh
         run: |
@@ -275,6 +298,7 @@ jobs:
           if ($p.ExitCode -ne 0) { Write-Error "uninstall exited $($p.ExitCode)"; exit 1 }
           if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OtzariaVoice') { Write-Error 'the Installed-apps entry stayed'; exit 1 }
           if (Test-Path -LiteralPath $env:PLUGIN_PATH) { Write-Error 'the delivered plugin file stayed'; exit 1 }
+          if (Test-Path -LiteralPath $env:ODD_PATH) { Write-Error 'the plugin in the Hebrew folder stayed'; exit 1 }
           Start-Sleep 5
           if (Test-Path $dir) { Get-ChildItem $dir; Write-Error 'the install folder stayed'; exit 1 }
           Write-Host 'uninstalled, the delivered plugin removed'

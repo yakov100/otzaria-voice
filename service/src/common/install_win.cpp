@@ -121,7 +121,7 @@ int install(bool quiet) {
                       nullptr) == ERROR_SUCCESS) {
     setString(h, L"DisplayName", kTitle);
     setString(h, L"DisplayVersion", util::widen(service::kVersion));
-    setString(h, L"Publisher", L"Otzaria");
+    setString(h, L"Publisher", L"יעקבישראל");  // the plugin's author in the Otzaria store
     setString(h, L"DisplayIcon", target);
     setString(h, L"InstallLocation", installDir());
     setString(h, L"UninstallString", quoted + L" --uninstall");

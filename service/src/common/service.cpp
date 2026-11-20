@@ -639,18 +639,17 @@ bool runtimeFound() {
 
 // A web page whose name is made to resolve to 127.0.0.1 (DNS rebinding) reaches
 // this port as if it were the page's own server, but its requests still carry
-// the page's name in Host. Only the loopback names with this port pass. The
-// bare "127.0.0.1" is what services before 2.5.5 send in POST /quit (postQuit)
-// when an older installer replaces a newer service; a browser never sends it
-// to this port.
+// the page's name in Host. Only the loopback names with this port pass, as the
+// Otzaria plugin store requires of every path. (Services before 2.5.5 sent a
+// bare "127.0.0.1" in POST /quit: an older installer cannot stop this service,
+// and says so; quitting it first, or uninstalling, lets it through.)
 bool hostAllowed(const Request& req) {
   const auto it = req.headers.find("host");
   if (it == req.headers.end()) return false;
   std::string host = it->second;
   for (auto& ch : host) ch = char(tolower(static_cast<unsigned char>(ch)));
   const std::string p = ":" + std::to_string(port());
-  if (host == "127.0.0.1" + p || host == "localhost" + p || host == "[::1]" + p) return true;
-  return host == "127.0.0.1" && req.method == "POST" && req.path == "/quit";
+  return host == "127.0.0.1" + p || host == "localhost" + p || host == "[::1]" + p;
 }
 
 // The Otzaria plugin store (otzaria.org) asks this path, from the browser,
