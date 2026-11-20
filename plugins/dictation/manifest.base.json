@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "com.yaakovisrael.voice-search",
+  "id": "org.otzaria.voice-search",
   "name": "חיפוש בדיבור",
   "version": "2.3.5",
   "description": "כפתור מיקרופון לחיפוש: מדברים, והטקסט נכתב בשדה החיפוש. הזיהוי נעשה במחשב, בלי אינטרנט. האינטרנט משמש רק להורדת שירות הדיבור וחבילת הקול.",

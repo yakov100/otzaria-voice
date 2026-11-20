@@ -51,8 +51,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: יצירת שתי חבילות התוסף
+      - name: יצירת חבילות התוסף (released, ‏next, ‏store)
         run: python3 plugins/dictation/build.py
+
+      - name: בדיקות התוסף
+        run: |
+          node plugins/dictation/test/fieldLimit.test.js
+          node plugins/dictation/test/serviceInstall.test.js
+
+      # The store edition (packages/store) rides inside the store's Windows installer, built and
+      # attested by store-windows.yml; here it is only validated.
+      - name: ולידציה (store)
+        uses: Otzaria/otzaria-plugin-validator@v1
+        with:
+          path: plugins/dictation/packages/store
+          build: 'true'
+          publish: 'false'
 
       # The official Otzaria action: the same checks as the store, and the .otzplugin.
       - name: גרסה

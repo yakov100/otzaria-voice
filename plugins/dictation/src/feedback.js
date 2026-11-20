@@ -5,6 +5,11 @@
 // confirmation dialog. Messages are plain text, never HTML.
 
 const DOWNLOAD_PAGE = 'https://github.com/yakov100/otzaria-voice/releases/latest';
+// The store edition (STORE_EDITION, set by build.py: the Otzaria plugin store's own id) downloads no
+// program: the store takes a plugin that comes with a service only so, and its installer brings the
+// service and this plugin together. Where the GitHub edition gets an installer, it opens this page,
+// the plugin's page in the store, where the installer is.
+const STORE_PAGE = 'https://otzaria.org/plugins/com.yaakovisrael.voice-search';
 // The Windows installers of the newest service. Otzaria downloads them itself (network.download) into
 // the Downloads folder. GitHub redirects these addresses to releases/download/<tag>/..., and Otzaria
 // checks every hop, so both prefixes are in the manifest's network.allowlist (and in Otzaria's
@@ -165,6 +170,13 @@ function getInstaller(platform, full) {
 }
 
 async function fetchInstaller(platform, full) {
+  if (STORE_EDITION) {
+    installerPhase = 'page';
+    const res = await Otzaria.call('app.openUrl', { url: STORE_PAGE });
+    if (res && res.success) return true;
+    sayError('לא ניתן לפתוח את דף התוסף בחנות התוספים: ' + STORE_PAGE);
+    return false;
+  }
   if (platform === 'windows') {
     say(
       full
@@ -214,10 +226,18 @@ async function explainNoService(platform) {
     );
     return;
   }
-  const full = platform === 'windows' && !(await serviceSeenBefore());
+  const full = !STORE_EDITION && platform === 'windows' && !(await serviceSeenBefore());
   const saved = full ? await recentFullInstaller() : '';
   let content;
-  if (saved) {
+  if (STORE_EDITION) {
+    content =
+      (platform === 'android'
+        ? 'הזיהוי נעשה באפליקציה קטנה בשם «שירות הדיבור של אוצריא», בלי אינטרנט.\n' +
+          'אם היא מותקנת — פתחו אותה פעם אחת ולחצו על הכפתור שבה.\n'
+        : 'הזיהוי נעשה בתוכנה שרצה ברקע במחשב, בלי אינטרנט.\n' +
+          'אם היא מותקנת — הפעילו מחדש את המחשב, והיא תעלה מעצמה.\n') +
+      'אם לא — לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים, הורידו משם את תוכנת ההתקנה והפעילו אותה פעם אחת.';
+  } else if (saved) {
     // The full installer came down lately and the service still does not answer: most likely the
     // file was not opened yet.
     content = howToOpen(saved, true) + '\n\n' +
@@ -403,13 +423,15 @@ async function offerServiceUpdate(st) {
         ? 'היא גם מהירה יותר מהגרסה שמותקנת אצלך: המודל נשאר טעון ברקע ולא נטען מחדש אחרי כל הפסקה, תוקנה ב-Windows איטיות שהופיעה כשהשירות עולה עם המחשב, והטקסט מפגר הרבה פחות בהכתבה ארוכה ורציפה.\n' +
           'שימו לב: הוסרה ההקלדה בדיבור לתוך תוכנות אחרות (Ctrl+Alt+M). ההכתבה פועלת בתוך אוצריא.\n'
         : '') +
-      (windows
-        ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (' + SMALL_INSTALLER_SIZE + ') לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
-        : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
+      (STORE_EDITION
+        ? 'השירות רץ במחשב ומתעדכן מדף התוסף בחנות התוספים: מורידים משם את תוכנת ההתקנה ומפעילים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
+        : windows
+          ? 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון, אוצריא תוריד את תוכנת ההתקנה החדשה (' + SMALL_INSTALLER_SIZE + ') לתיקיית ההורדות, ופותחים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n'
+          : 'השירות רץ במחשב ואינו מתעדכן דרך חנות התוספים. לעדכון נפתח דף ההורדה; מורידים את הגרסה החדשה ומתקינים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n') +
       (cannotLoadFix
         ? 'אם מופיעה אצלכם השגיאה «cannot load», צריך לעדכן כדי שההכתבה תעבוד. אם ההכתבה עובדת, לא חייבים: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n'
         : 'לא חייבים לעדכן: «ביטול» ממשיך עם הגרסה הנוכחית, ונציע שוב בעוד שבועיים.\n') +
-      (windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
+      (STORE_EDITION ? 'לפתוח את דף התוסף בחנות?' : windows ? 'להוריד את העדכון עכשיו?' : 'לפתוח את דף ההורדה?'),
   );
   try {
     await Otzaria.call('storage.set', { key, value: LATEST_SERVICE + ':' + Date.now() });

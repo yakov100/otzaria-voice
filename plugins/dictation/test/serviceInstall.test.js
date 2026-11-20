@@ -11,8 +11,10 @@ const assert = require('assert');
 const root = path.join(__dirname, '..');
 const repo = path.join(root, '..', '..');
 const RELEASED = ['service.js', 'feedback.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
-const bundle = '(function () {\n\'use strict\';\n' +
+// build.py's bundle: STORE_EDITION is false in "released" (GitHub) and true in "store".
+const bundleOf = (store) => '(function () {\n\'use strict\';\nconst STORE_EDITION = ' + store + ';\n' +
   RELEASED.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
+const STORE_PAGE = 'https://otzaria.org/plugins/com.yaakovisrael.voice-search';
 
 const INSTALLER = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
 const INSTALLER_FULL = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-with-models.exe';
@@ -25,9 +27,9 @@ const FIELD_EVENT = 'search.fieldAction.invoked';  // field_actions.js
  * either, asked at every /status). [download]: network.download's answer, or a function returning a
  * promise of it. [storage]: the plugin's stored keys (written to as well); [storageFails]: storage.get
  * throws. [confirm]: (title) => the user's answer to a dialog (default: confirmed). [timers]: replaces
- * setInterval/clearInterval.
+ * setInterval/clearInterval. [store]: the store edition.
  */
-function load({ status, download, storage, storageFails, confirm, timers }) {
+function load({ status, download, storage, storageFails, confirm, timers, store: storeEdition }) {
   const handlers = {};
   const calls = [];
   const store = storage || {};
@@ -69,7 +71,7 @@ function load({ status, download, storage, storageFails, confirm, timers }) {
     clearInterval: (timers && timers.clearInterval) || clearInterval,
   };
   vm.createContext(ctx);
-  vm.runInContext(bundle, ctx);
+  vm.runInContext(bundleOf(!!storeEdition), ctx);
   return { handlers, calls, store };
 }
 
@@ -418,6 +420,72 @@ async function test(name, fn) {
     const src = fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8');
     const urls = (src.match(/https:\/\/github\.com\/[^'"\s]+\.exe/g) || []).sort();
     assert.deepStrictEqual(urls, [INSTALLER_FULL, INSTALLER].sort());
+  });
+
+  // ------------------------------------------------------------ the store edition
+  // The Otzaria plugin store refuses a plugin that downloads a program (its review policy, §1): this
+  // edition never calls network.download, and opens its store page where the other one downloads.
+
+  const storeManifest = () => {
+    const m = JSON.parse(fs.readFileSync(path.join(root, 'manifest.base.json'), 'utf8'));
+    const over = JSON.parse(fs.readFileSync(path.join(root, 'manifest.store.json'), 'utf8'));
+    delete over._comment;
+    return Object.assign(m, over);  // build.py, manifest_for
+  };
+
+  for (const platform of ['windows', 'linux', 'macos', 'android']) {
+    await test('store edition, ' + platform + ', no service: no download, the store page opens', async () => {
+      const calls = await press(platform, { status: null, store: true });
+      assert.strictEqual(of(calls, 'network.download').length, 0, 'a download in the store edition');
+      const asked = of(calls, 'ui.showConfirm');
+      assert.strictEqual(asked.length, 1);
+      assert.ok(asked[0].payload.content.includes('דף התוסף בחנות התוספים'), asked[0].payload.content);
+      assert.ok(!asked[0].payload.content.includes('תיקיית ההורדות'), asked[0].payload.content);
+      assert.deepStrictEqual(of(calls, 'app.openUrl').map(c => c.payload.url), [STORE_PAGE]);
+    });
+  }
+
+  await test('store edition, the user declines: nothing opens', async () => {
+    const calls = await press('windows', { status: null, store: true, confirm: () => false });
+    assert.strictEqual(of(calls, 'network.download').length, 0);
+    assert.strictEqual(of(calls, 'app.openUrl').length, 0);
+  });
+
+  await test('store edition, Windows, service 2.5.1: the update is offered through the store page', async () => {
+    const calls = await press('windows', { status: serviceAt('2.5.1', 'windows'), store: true });
+    const asked = updateAsk(calls);
+    assert.strictEqual(asked.length, 1, 'no update offered');
+    assert.ok(asked[0].content.includes('cannot load'), asked[0].content);
+    assert.ok(asked[0].content.includes('לפתוח את דף התוסף בחנות?'), asked[0].content);
+    assert.ok(!asked[0].content.includes('תיקיית ההורדות'), asked[0].content);
+    assert.strictEqual(of(calls, 'network.download').length, 0, 'a download in the store edition');
+    assert.deepStrictEqual(of(calls, 'app.openUrl').map(c => c.payload.url), [STORE_PAGE]);
+  });
+
+  await test('store edition, service 2.5.2: nothing is offered, as in the GitHub edition', async () => {
+    const calls = await press('windows', { status: serviceAt('2.5.2', 'windows'), store: true });
+    assert.strictEqual(updateAsk(calls).length, 0);
+    assert.strictEqual(of(calls, 'network.download').length, 0);
+  });
+
+  await test('store edition manifest: the store id, the local service only, no network.access', () => {
+    const m = storeManifest();
+    assert.strictEqual(m.id, 'com.yaakovisrael.voice-search');
+    assert.ok(!m.permissions.includes('network.access'), 'network.access in the store edition');
+    assert.ok(m.permissions.includes('network.localhost'), 'network.localhost is missing');
+    assert.ok(m.permissions.includes('app.open_url'), 'app.open_url is missing (the store page)');
+    assert.deepStrictEqual(m.network.allowlist, ['http://127.0.0.1:47811']);
+    const base = JSON.parse(fs.readFileSync(path.join(root, 'manifest.base.json'), 'utf8'));
+    assert.strictEqual(base.id, 'org.otzaria.voice-search', 'the GitHub edition keeps its id');
+    assert.strictEqual(m.version, base.version);
+  });
+
+  await test('the service answers the store with the store edition\'s id', () => {
+    const id = /const char\* kServiceId = "([^"]+)"/.exec(
+      fs.readFileSync(path.join(repo, 'service', 'src', 'common', 'service.cpp'), 'utf8'))[1];
+    assert.strictEqual(id, storeManifest().id);
+    const src = fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8');
+    assert.ok(src.includes("'https://otzaria.org/plugins/" + id + "'"), 'STORE_PAGE names another id');
   });
 
   await test('read-aloud: its manifest lets every hop through too (the exact address alone did not)', () => {

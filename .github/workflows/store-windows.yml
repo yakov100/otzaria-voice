@@ -49,7 +49,7 @@ jobs:
         id: build
         uses: Otzaria/otzaria-plugin-validator@v1
         with:
-          path: plugins/dictation/packages/released
+          path: plugins/dictation/packages/store
           build: 'true'
           publish: 'false'
 
