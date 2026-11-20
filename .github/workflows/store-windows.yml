@@ -5,8 +5,8 @@
 # file to this repository, a commit and this workflow; its reviewer then reads
 # this workflow in full. So this file only builds: the service (x64 and ARM64,
 # from source, with Visual Studio and CMake from the runner image), the plugin
-# (Otzaria's own validator and packer), and the installer (NSIS from the runner
-# image), then attests the installer and the plugin. The service's full tests
+# (Otzaria's own validator and packer), and the installer (NSIS from the
+# windows-2022 runner image), then attests the installer and the plugin. The service's full tests
 # stay in service.yml. The check job opens the installer the way the store does
 # (7-Zip, without running it), verifies the attestation, and installs it.
 #
@@ -89,7 +89,8 @@ jobs:
   installer:
     name: המתקין
     needs: [plugin, service]
-    runs-on: windows-latest
+    # NSIS is in the windows-2022 image (3.10), not in windows-2025's.
+    runs-on: windows-2022
     permissions:
       contents: read
       id-token: write
