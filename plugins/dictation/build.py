@@ -14,8 +14,8 @@ store     the Otzaria plugin store's edition (from 2.3.5): its own id
           (com.yaakovisrael.voice-search) and manifest.store.json over the
           base manifest. It downloads no program: the store's installer brings
           the service, and where the GitHub edition ("released") downloads an
-          installer, this one opens its page in the store (STORE_EDITION in
-          feedback.js). It rides inside the store's Windows installer
+          installer, this one opens its page in the store (install_store.js in
+          place of install_github.js). It rides inside the store's Windows installer
           (installer/windows/otzaria-voice.nsi).
 
 Users of Otzaria 0.9.98 keep the 2.2.x plugin: Otzaria 0.9.98 does not know the
@@ -36,11 +36,16 @@ ROOT = pathlib.Path(__file__).resolve().parent
 SRC = ROOT / "src"
 DIST = ROOT / "packages"
 
-FILES = ["service.js", "feedback.js", "dictation.js", "toolbar.js", "field_actions.js", "main.js"]
+# How the service's installer reaches the user is the edition's own file, with the same functions:
+# install_github.js downloads it (network.download), install_store.js opens the store page. The
+# store edition so carries no download code at all.
+FILES = ["service.js", "feedback.js", "install_github.js", "dictation.js", "toolbar.js", "field_actions.js",
+         "main.js"]
+STORE_FILES = [("install_store.js" if f == "install_github.js" else f) for f in FILES]
 VARIANTS = {
     "released": {"files": FILES, "store": False},
     "next": {"files": FILES, "store": False},
-    "store": {"files": FILES, "store": True},
+    "store": {"files": STORE_FILES, "store": True},
 }
 
 
@@ -53,12 +58,11 @@ def manifest_for(name):
     return m
 
 
-def bundle(files, store):
+def bundle(files):
     # One classic script: on Linux and Android Otzaria loads a headless entry
     # from file://, where ES modules are blocked.
     parts = ["/* חיפוש בדיבור — built by plugins/dictation/build.py from plugins/dictation/src; do not edit. */",
-             "(function () {", "'use strict';",
-             "const STORE_EDITION = " + ("true" if store else "false") + ";", ""]
+             "(function () {", "'use strict';", ""]
     for f in files:
         parts.append((SRC / f).read_text(encoding="utf-8").rstrip() + "\n")
     parts.append("})();\n")
@@ -75,7 +79,7 @@ def main():
         (out / "manifest.json").write_text(
             json.dumps(manifest_for(name), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8", newline="\n")
-        (out / "main.js").write_text(bundle(v["files"], v["store"]), encoding="utf-8", newline="\n")
+        (out / "main.js").write_text(bundle(v["files"]), encoding="utf-8", newline="\n")
         print(out)
 
 

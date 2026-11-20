@@ -10,10 +10,10 @@ const assert = require('assert');
 
 const root = path.join(__dirname, '..');
 const repo = path.join(root, '..', '..');
-const RELEASED = ['service.js', 'feedback.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
-// build.py's bundle: STORE_EDITION is false in "released" (GitHub) and true in "store".
-const bundleOf = (store) => '(function () {\n\'use strict\';\nconst STORE_EDITION = ' + store + ';\n' +
-  RELEASED.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
+const RELEASED = ['service.js', 'feedback.js', 'install_github.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
+const STORE = RELEASED.map(f => (f === 'install_github.js' ? 'install_store.js' : f));  // build.py, STORE_FILES
+const bundleOf = (store) => '(function () {\n\'use strict\';\n' +
+  (store ? STORE : RELEASED).map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
 const STORE_PAGE = 'https://otzaria.org/plugins/com.yaakovisrael.voice-search';
 
 const INSTALLER = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
@@ -417,7 +417,7 @@ async function test(name, fn) {
   });
 
   await test('the plugin downloads exactly the two installer addresses tested here', () => {
-    const src = fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8');
+    const src = fs.readFileSync(path.join(root, 'src', 'install_github.js'), 'utf8');
     const urls = (src.match(/https:\/\/github\.com\/[^'"\s]+\.exe/g) || []).sort();
     assert.deepStrictEqual(urls, [INSTALLER_FULL, INSTALLER].sort());
   });
@@ -484,8 +484,27 @@ async function test(name, fn) {
     const id = /const char\* kServiceId = "([^"]+)"/.exec(
       fs.readFileSync(path.join(repo, 'service', 'src', 'common', 'service.cpp'), 'utf8'))[1];
     assert.strictEqual(id, storeManifest().id);
-    const src = fs.readFileSync(path.join(root, 'src', 'feedback.js'), 'utf8');
+    const src = fs.readFileSync(path.join(root, 'src', 'install_store.js'), 'utf8');
     assert.ok(src.includes("'https://otzaria.org/plugins/" + id + "'"), 'STORE_PAGE names another id');
+  });
+
+  await test('the store edition carries no download code and no GitHub address', () => {
+    const store = bundleOf(true);
+    for (const banned of ['network.download', 'github.com']) {
+      assert.ok(!store.includes(banned), 'the store edition contains ' + banned);
+    }
+    assert.ok(!/https?:\/\/[^'"\s]+\.(exe|msi|zip|apk|dmg|pkg|deb)\b/.test(store), 'the store edition names a program to download');
+    assert.ok(bundleOf(false).includes('network.download'), 'the GitHub edition lost its download');
+  });
+
+  await test('both editions define the same installer functions', () => {
+    const names = (f) => (fs.readFileSync(path.join(root, 'src', f), 'utf8').match(/^(?:async )?function (\w+)/gm) || [])
+      .map(s => s.replace(/^(?:async )?function /, ''));
+    const used = ['getInstaller', 'wantsFullInstaller', 'recentFullInstaller', 'installerBusyText', 'noServiceAsk',
+      'updateHow', 'updateQuestion'];
+    for (const f of ['install_github.js', 'install_store.js']) {
+      for (const n of used) assert.ok(names(f).includes(n), f + ' lacks ' + n);
+    }
   });
 
   await test('read-aloud: its manifest lets every hop through too (the exact address alone did not)', () => {

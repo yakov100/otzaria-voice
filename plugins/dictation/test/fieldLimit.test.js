@@ -12,8 +12,8 @@ const vm = require('vm');
 const assert = require('assert');
 
 const root = path.join(__dirname, '..');
-const FILES = ['service.js', 'feedback.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
-const bundle = '(function () {\n\'use strict\';\nconst STORE_EDITION = false;\n' +
+const FILES = ['service.js', 'feedback.js', 'install_github.js', 'dictation.js', 'toolbar.js', 'field_actions.js', 'main.js'];  // build.py, FILES
+const bundle = '(function () {\n\'use strict\';\n' +
   FILES.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
 
 const FIELD_MAX = 1000;
