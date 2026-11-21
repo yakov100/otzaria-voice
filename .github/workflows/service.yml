@@ -970,6 +970,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read  # the store installer of this commit, from store-windows.yml's run
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: service-v${{ needs.detect.outputs.version }}
@@ -993,6 +995,35 @@ jobs:
         with:
           path: files
           merge-multiple: true
+
+      # The Otzaria plugin store's Windows installer and the plugin inside it, exactly as
+      # store-windows.yml built and attested them for this same commit: the store compares the
+      # file at its release link with the file it receives, and both with the attestation. That
+      # run is shorter than this one; it is waited for, and the release does not go out without it.
+      - name: מתקין החנות מאותו commit
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          run=''
+          for i in $(seq 1 60); do
+            run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow store-windows.yml --commit "$GITHUB_SHA" \
+              --event push --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"')"
+            set -- $run
+            [ "${2:-}" = completed ] && break
+            echo "store-windows.yml: ${run:-no run yet} ($i/60)"
+            sleep 30
+          done
+          set -- $run
+          if [ "${2:-}" != completed ] || [ "${3:-}" != success ]; then
+            echo "::error::store-windows.yml for $GITHUB_SHA did not succeed: ${run:-no run}"
+            exit 1
+          fi
+          gh run download "$1" --repo "$GITHUB_REPOSITORY" --name store-installer --dir store
+          for f in store/*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" >/dev/null ||
+              { echo "::error::no valid attestation for $f"; exit 1; }
+          done
+          ls -l store
+          cp store/* files/
 
       - name: יצירת ה-Release
         if: steps.check.outputs.exists == 'false'
@@ -1022,6 +1053,8 @@ jobs:
           | Linux | \`.deb\` (אובונטו/דביאן) או \`.tar.gz\` (כל הפצה) |
           | macOS (Apple silicon) | \`.pkg\` — בפעם הראשונה: קליק ימני ← פתיחה |
           | Android | \`.apk\` |
+
+          \`otzaria-voice-windows-store-…exe\` הוא המתקין שמוצע בחנות התוספים של אוצריא: השירות לבד, בלי חבילת דיבור, ובתוכו התוסף חיפוש בדיבור בגרסת החנות (\`com.yaakovisrael.voice-search-….otzplugin\`, גם הוא כאן), שעובר לאוצריא בסוף ההתקנה. הוא נבנה ב-\`store-windows.yml\` ונושא אישור בנייה של GitHub.
 
           הוראות מלאות: https://github.com/$GITHUB_REPOSITORY#readme
 
