@@ -192,9 +192,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # As the store checks it: this repository, this commit, this workflow.
           foreach ($f in Get-ChildItem out -File) {
-            gh attestation verify $f.FullName --repo $env:GITHUB_REPOSITORY
-            if ($LASTEXITCODE) { Write-Error "no valid attestation for $($f.Name)"; exit 1 }
+            gh attestation verify $f.FullName --repo $env:GITHUB_REPOSITORY --source-digest $env:GITHUB_SHA `
+              --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/store-windows.yml"
+            if ($LASTEXITCODE) { Write-Error "no attestation of $($f.Name) by store-windows.yml at $env:GITHUB_SHA"; exit 1 }
           }
 
       # Otzaria is not on the runner: a stand-in handler for otzaria:// links
