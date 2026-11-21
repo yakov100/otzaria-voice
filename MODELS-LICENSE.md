@@ -1,6 +1,6 @@
 # רישיון שימוש מוגבל: מודל השפה, מודל הזיהוי של voice-pack-v5 והקול "חיים" של שירות הדיבור לאוצריא
 
-גרסה 1.1, ‏18.11.2026. בגרסה 1.0 (4.11.2026) לא היה פריט 3 בסעיף 1. © 2026 yakov100 ("בעל הזכויות").
+גרסה 1.2, ‏21.11.2026. בגרסה 1.1 (18.11.2026) לא היה בסעיף 4 המזהה `com.yaakovisrael.voice-search`, ובגרסה 1.0 (4.11.2026) לא היה גם פריט 3 בסעיף 1. © 2026 yakov100 ("בעל הזכויות").
 
 **בקצרה:** אם אתם משתמשים בשירות דרך אוצריא והתוספים המאושרים, אין לכם מה לעשות, רק לא להפיץ קובצי שמע בקול "חיים". אסור לקחת את הקבצים שבסעיף 1 לשימוש מחוץ לשירות ולאוצריא.
 
@@ -46,7 +46,7 @@
 
 | שם | מזהה | מפתח |
 |---|---|---|
-| חיפוש בדיבור | `org.otzaria.voice-search` | בעל הזכויות |
+| חיפוש בדיבור | `org.otzaria.voice-search` (הגרסה שב-GitHub), ו-`com.yaakovisrael.voice-search` (הגרסה שבחנות התוספים של אוצריא) | בעל הזכויות |
 | הקראה קולית | `org.otzaria.read-aloud` | בעל הזכויות |
 | וורד לאוצריא | `com.otzaria_word_editor.superdoc` | Y-PLONI |
 
@@ -86,7 +86,7 @@
 
 ## English translation (for convenience; the Hebrew text governs)
 
-**Restricted use license: the language model, the speech recognition model of voice-pack-v5 and the voice "חיים" (Chaim) of the Otzaria voice service.** Version 1.1, November 18, 2026. Version 1.0 (November 4, 2026) had no item 1(c). © 2026 yakov100 (the "Owner").
+**Restricted use license: the language model, the speech recognition model of voice-pack-v5 and the voice "חיים" (Chaim) of the Otzaria voice service.** Version 1.2, November 21, 2026. Version 1.1 (November 18, 2026) did not list `com.yaakovisrael.voice-search` in section 4, and version 1.0 (November 4, 2026) also had no item 1(c). © 2026 yakov100 (the "Owner").
 
 **In short:** if you use the service through Otzaria and the approved plugins, there is nothing you need to do, except not distributing audio files in the voice "חיים". The files in section 1 may not be taken for use outside the service and Otzaria.
 
@@ -118,7 +118,7 @@
    Text that the service types in dictation belongs to the user and is not restricted by this license. Audio files that the service creates when reading aloud in the voice "חיים" are for personal use only: you may listen to them in any player, and you may not distribute them.
 
 4. **Approved plugins.**
-   - `org.otzaria.voice-search` (the Owner)
+   - `org.otzaria.voice-search` (the edition on GitHub) and `com.yaakovisrael.voice-search` (the edition in the Otzaria plugin store) (the Owner)
    - `org.otzaria.read-aloud` (the Owner)
    - `com.otzaria_word_editor.superdoc` (Y-PLONI)
 
