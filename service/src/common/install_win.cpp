@@ -4,6 +4,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shellapi.h>
+
+#include <filesystem>
+#include <fstream>
 
 #include "handoff.h"
 #include "install.h"
@@ -117,7 +121,7 @@ int install(bool quiet) {
                       nullptr) == ERROR_SUCCESS) {
     setString(h, L"DisplayName", kTitle);
     setString(h, L"DisplayVersion", util::widen(service::kVersion));
-    setString(h, L"Publisher", L"Otzaria");
+    setString(h, L"Publisher", L"יעקבישראל");  // the plugin's author in the Otzaria store
     setString(h, L"DisplayIcon", target);
     setString(h, L"InstallLocation", installDir());
     setString(h, L"UninstallString", quoted + L" --uninstall");
@@ -140,6 +144,84 @@ int install(bool quiet) {
   return 0;
 }
 
+namespace {
+
+// The folders deliverPlugin handed to Otzaria, one per line (UTF-8), for uninstall.
+std::wstring deliveredList() { return installDir() + L"\\delivered-plugins.txt"; }
+
+// RFC 3986 percent-encoding of everything but the unreserved characters, as
+// [Uri]::EscapeDataString does in the store's guide.
+std::string escapeData(const std::string& s) {
+  static const char* hex = "0123456789ABCDEF";
+  std::string out;
+  for (const unsigned char c : s) {
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
+        c == '_' || c == '.' || c == '~') {
+      out += char(c);
+    } else {
+      out += '%';
+      out += hex[c >> 4];
+      out += hex[c & 15];
+    }
+  }
+  return out;
+}
+
+// Removes the plugin files deliverPlugin left, and their folders when empty.
+// Only "<folder>\plugin.otzplugin" is deleted, whatever the list says.
+void removeDeliveredPlugins() {
+  std::ifstream in{std::filesystem::path(deliveredList())};
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty()) continue;
+    const std::wstring dir = util::widen(line);
+    DeleteFileW((dir + L"\\plugin.otzplugin").c_str());
+    RemoveDirectoryW(dir.c_str());
+  }
+  in.close();
+  DeleteFileW(deliveredList().c_str());
+}
+
+}  // namespace
+
+int deliverPlugin(const platform::Path& plugin) {
+  std::error_code ec;
+  if (!plugin.is_absolute() || plugin.filename() != L"plugin.otzplugin" ||
+      !std::filesystem::is_regular_file(plugin, ec)) {
+    platform::log("deliver-plugin: not a plugin file: " + platform::toUtf8(plugin));
+    return 2;
+  }
+  CreateDirectoryW((localAppData() + L"\\Programs").c_str(), nullptr);
+  CreateDirectoryW(installDir().c_str(), nullptr);
+  {
+    std::ofstream list{std::filesystem::path(deliveredList()), std::ios::app | std::ios::binary};
+    list << platform::toUtf8(plugin.parent_path()) << "\n";
+  }
+  // Otzaria registers otzaria:// when it is installed. Without it, Windows would
+  // offer to look for an app in the Microsoft Store instead.
+  HKEY key;
+  if (RegOpenKeyExW(HKEY_CLASSES_ROOT, L"otzaria\\shell\\open\\command", 0, KEY_READ, &key) !=
+      ERROR_SUCCESS) {
+    platform::log("deliver-plugin: no program opens otzaria:// links");
+    return 3;
+  }
+  RegCloseKey(key);
+  const std::wstring uri =
+      L"otzaria://plugin/install-local?path=" + util::widen(escapeData(platform::toUtf8(plugin)));
+  SHELLEXECUTEINFOW info{sizeof info};
+  info.fMask = SEE_MASK_FLAG_NO_UI;
+  info.lpVerb = L"open";
+  info.lpFile = uri.c_str();
+  info.nShow = SW_SHOWNORMAL;
+  if (!ShellExecuteExW(&info)) {
+    platform::log("deliver-plugin: opening the link failed, error " + std::to_string(GetLastError()));
+    return 3;
+  }
+  platform::log("deliver-plugin: asked Otzaria to install " + platform::toUtf8(plugin));
+  return 0;
+}
+
 int uninstall(bool quiet) {
   HKEY h;
   if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &h) == ERROR_SUCCESS) {
@@ -153,6 +235,7 @@ int uninstall(bool quiet) {
   Sleep(500);  // let the service close the pack's files
   const uint64_t freed = pack::removeInstalled() + voicemodel::removeInstalled();
   platform::log("uninstalled, freed " + std::to_string(freed >> 20) + " MB of packs");
+  removeDeliveredPlugins();  // before the folder itself goes (rmdir needs it empty)
   // A running program cannot delete its own file: a hidden shell does it a
   // moment after this process exits.
   const std::wstring dir = installDir() + L"\\";

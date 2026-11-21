@@ -1,6 +1,6 @@
 """Builds the installable forms of the plugin from one source.
 
-    python plugins/dictation/build.py            -> plugins/dictation/packages/released, plugins/dictation/packages/next
+    python plugins/dictation/build.py  -> plugins/dictation/packages/released, .../next, .../store
 
 released  minAppVersion 0.9.98.1 (Otzaria with search-field actions, see
           docs/dictation/search-field-actions-contract.md): a microphone
@@ -10,6 +10,13 @@ released  minAppVersion 0.9.98.1 (Otzaria with search-field actions, see
 next      the slot for a build that needs an Otzaria newer than the released
           one. Today there is none, so it is the same as "released"; the
           workflow still packs it as a test artifact.
+store     the Otzaria plugin store's edition (from 2.3.5): its own id
+          (com.yaakovisrael.voice-search) and manifest.store.json over the
+          base manifest. It downloads no program: the store's installer brings
+          the service, and where the GitHub edition ("released") downloads an
+          installer, this one opens its page in the store (install_store.js in
+          place of install_github.js). It rides inside the store's Windows installer
+          (installer/windows/otzaria-voice.nsi).
 
 Users of Otzaria 0.9.98 keep the 2.2.x plugin: Otzaria 0.9.98 does not know the
 search.field_actions permission and refuses the manifest (how it compares a
@@ -29,15 +36,26 @@ ROOT = pathlib.Path(__file__).resolve().parent
 SRC = ROOT / "src"
 DIST = ROOT / "packages"
 
-FILES = ["service.js", "feedback.js", "dictation.js", "toolbar.js", "field_actions.js", "main.js"]
+# How the service's installer reaches the user is the edition's own file, with the same functions:
+# install_github.js downloads it (network.download), install_store.js opens the store page. The
+# store edition so carries no download code at all.
+FILES = ["service.js", "feedback.js", "install_github.js", "dictation.js", "toolbar.js", "field_actions.js",
+         "main.js"]
+STORE_FILES = [("install_store.js" if f == "install_github.js" else f) for f in FILES]
 VARIANTS = {
-    "released": {"files": FILES},
-    "next": {"files": FILES},
+    "released": {"files": FILES, "store": False},
+    "next": {"files": FILES, "store": False},
+    "store": {"files": STORE_FILES, "store": True},
 }
 
 
 def manifest_for(name):
-    return json.loads((ROOT / "manifest.base.json").read_text(encoding="utf-8"))
+    m = json.loads((ROOT / "manifest.base.json").read_text(encoding="utf-8"))
+    if VARIANTS[name]["store"]:
+        over = json.loads((ROOT / "manifest.store.json").read_text(encoding="utf-8"))
+        over.pop("_comment", None)
+        m.update(over)
+    return m
 
 
 def bundle(files):

@@ -13,7 +13,7 @@
 // Linked against Core Audio instead of loading it at run time (notarization).
 #define MA_NO_RUNTIME_LINKING
 #endif
-#include "../../third_party/miniaudio/miniaudio.h"
+#include "miniaudio.h"  // fetched by CMakeLists.txt (pinned by SHA-256)
 
 #include <chrono>
 #include <condition_variable>

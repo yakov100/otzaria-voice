@@ -171,6 +171,11 @@ int run(std::vector<std::string> args) {
     std::printf("otzaria-voice %s\n", service::kVersion);
     return 0;
   }
+#ifdef _WIN32
+  if (arg == "--deliver-plugin") {
+    return args.size() > 2 ? install::deliverPlugin(platform::fromUtf8(args[2])) : 2;
+  }
+#endif
   const bool quiet = args.size() > 2 && args[2] == "--quiet";
   if (arg == "--install") return install::install(quiet);
   if (arg == "--uninstall") return install::uninstall(quiet);

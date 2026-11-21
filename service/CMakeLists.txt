@@ -46,6 +46,37 @@ if(WIN32 AND NOT OTZARIA_VOICE_MINIAUDIO)
   set(AUDIO_SOURCES ${SRC_COMMON}/audio_win.cpp)
 else()
   set(AUDIO_SOURCES ${SRC_COMMON}/audio_miniaudio.cpp)
+  # miniaudio 0.11.22 (one 4MB header, public domain or MIT-0: third_party/miniaudio/LICENSE)
+  # is not kept in the repository: the Otzaria plugin store reviews every source file and
+  # takes none over 2MB. It is the upstream release, fetched at configure time and pinned by
+  # its SHA-256; a copy already in third_party/miniaudio/ (for builds without network) is
+  # used when its hash is the same.
+  set(MINIAUDIO_SHA256 9019743287e443c55e5737a7297f38e5e358561701d6db2d905afb114390c410)
+  set(MINIAUDIO_URL
+    https://raw.githubusercontent.com/mackron/miniaudio/350784a9467a79d0fa65802132668e5afbcf3777/miniaudio.h)
+  set(MINIAUDIO_LOCAL ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio/miniaudio.h)
+  set(MINIAUDIO_DIR ${CMAKE_BINARY_DIR}/third_party/miniaudio)
+  set(MINIAUDIO_HEADER ${MINIAUDIO_DIR}/miniaudio.h)
+  if(EXISTS ${MINIAUDIO_HEADER})
+    file(SHA256 ${MINIAUDIO_HEADER} MINIAUDIO_HAVE)
+  endif()
+  if(NOT MINIAUDIO_HAVE STREQUAL MINIAUDIO_SHA256 AND EXISTS ${MINIAUDIO_LOCAL})
+    file(SHA256 ${MINIAUDIO_LOCAL} MINIAUDIO_LOCAL_HASH)
+    if(MINIAUDIO_LOCAL_HASH STREQUAL MINIAUDIO_SHA256)
+      file(COPY ${MINIAUDIO_LOCAL} DESTINATION ${MINIAUDIO_DIR})
+      set(MINIAUDIO_HAVE ${MINIAUDIO_SHA256})
+    endif()
+  endif()
+  if(NOT MINIAUDIO_HAVE STREQUAL MINIAUDIO_SHA256)
+    file(DOWNLOAD ${MINIAUDIO_URL} ${MINIAUDIO_HEADER}
+      EXPECTED_HASH SHA256=${MINIAUDIO_SHA256} TLS_VERIFY ON STATUS MINIAUDIO_STATUS)
+    list(GET MINIAUDIO_STATUS 0 MINIAUDIO_CODE)
+    if(NOT MINIAUDIO_CODE EQUAL 0)
+      message(FATAL_ERROR "miniaudio: download failed (${MINIAUDIO_STATUS}). Without network, "
+        "put the 0.11.22 miniaudio.h (SHA-256 ${MINIAUDIO_SHA256}) in third_party/miniaudio/.")
+    endif()
+  endif()
+  include_directories(${MINIAUDIO_DIR})
 endif()
 
 if(ANDROID)
