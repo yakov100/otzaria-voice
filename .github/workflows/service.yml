@@ -1000,6 +1000,8 @@ jobs:
       # store-windows.yml built and attested them for this same commit: the store compares the
       # file at its release link with the file it receives, and both with the attestation. That
       # run is shorter than this one; it is waited for, and the release does not go out without it.
+      # Only its push run counts: when it failed or was cancelled, rerun that run (gh run rerun),
+      # then this job.
       - name: מתקין החנות מאותו commit
         if: steps.check.outputs.exists == 'false'
         run: |
@@ -1018,9 +1020,11 @@ jobs:
             exit 1
           fi
           gh run download "$1" --repo "$GITHUB_REPOSITORY" --name store-installer --dir store
+          # As the store checks it: this repository, this commit, store-windows.yml.
           for f in store/*; do
-            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" >/dev/null ||
-              { echo "::error::no valid attestation for $f"; exit 1; }
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" --source-digest "$GITHUB_SHA" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/store-windows.yml" >/dev/null ||
+              { echo "::error::no attestation of $f by store-windows.yml at $GITHUB_SHA"; exit 1; }
           done
           ls -l store
           cp store/* files/
