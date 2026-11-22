@@ -28,6 +28,7 @@ on:
       - 'plugins/dictation/**'
       - 'installer/windows/otzaria-voice.nsi'
       - 'installer/windows/notices-he.txt'
+      - 'MODELS-LICENSE.md'
       - '.github/workflows/store-windows.yml'
   workflow_dispatch:
 
@@ -146,7 +147,8 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           & $makensis.FullName /V2 "/DAppVersion=$version" "/DSourceExe=$pwd\dist\otzaria-voice.exe" `
             "/DSourceExeArm64=$pwd\dist\otzaria-voice-arm64.exe" "/DPluginFile=$($plugin.FullName)" `
-            "/DPackZip=$env:PACK_ZIP" "/DOutFile=$pwd\out\$name" installer\windows\otzaria-voice.nsi
+            "/DPackZip=$env:PACK_ZIP" "/DModelsLicense=$pwd\MODELS-LICENSE.md" "/DOutFile=$pwd\out\$name" `
+            installer\windows\otzaria-voice.nsi
           if ($LASTEXITCODE) { exit 1 }
           # The store takes installers of up to 350MiB (policy.js, LIMITS.installerBytes).
           $length = (Get-Item "out\$name").Length
@@ -356,7 +358,11 @@ jobs:
             foreach ($f in 'ctc\model.int8.onnx', 'lm\library.otzlm', 'LICENSES.txt', 'MODELS-LICENSE.md') {
               if (-not (Test-Path "$pack\$f")) { Write-Error "pack: missing $f"; exit 1 }
             }
-            Write-Host "pack $version installed by setup"
+            # The repository's license, which approves the store edition, not the zip's older copy.
+            if (-not (Select-String -LiteralPath "$pack\MODELS-LICENSE.md" -SimpleMatch 'com.yaakovisrael.voice-search' -Quiet)) {
+              Write-Error 'the installed MODELS-LICENSE.md does not name the store edition'; exit 1
+            }
+            Write-Host "pack $version installed by setup, with the current MODELS-LICENSE.md"
           }
 
           gh release download $tag --repo $repo --pattern $file --dir zip

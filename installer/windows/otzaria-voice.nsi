@@ -52,6 +52,13 @@ SetCompress off     ; the files: see above
 !ifndef SourceExeArm64
   !error "Define SourceExeArm64: /DSourceExeArm64=path\otzaria-voice-arm64.exe"
 !endif
+!ifdef PackZip
+  ; The repository's MODELS-LICENSE.md: the copy inside a pack's zip is the one
+  ; of the day the pack was made, and may predate plugins approved since.
+  !ifndef ModelsLicense
+    !error "With PackZip, define ModelsLicense: /DModelsLicense=path\MODELS-LICENSE.md"
+  !endif
+!endif
 !ifndef PluginFile
   !error "Define PluginFile: /DPluginFile=path\plugin.otzplugin"
 !endif
@@ -142,7 +149,12 @@ Function InstallPack
   ${EndIf}
   Delete "$PLUGINSDIR\otzaria-voice-he.zip"
   ${If} $R7 == 0
-    ; The zip carries MODELS-LICENSE.md, which notices-he.txt says is in the pack.
+    ; The current models license beside them, over the zip's copy, as the GitHub
+    ; installers with the models do (installer/fetch-pack.sh); notices-he.txt
+    ; says it is there.
+    SetOutPath "$APPDATA\otzaria\stt\pack"
+    File "/oname=MODELS-LICENSE.md" "${ModelsLicense}"
+    SetOutPath "$PLUGINSDIR"
     StrCpy $PackNote "חבילת הדיבור מותקנת: ההכתבה עובדת גם בלי אינטרנט.$\r$\n$\r$\n"
   ${Else}
     StrCpy $PackNote "חבילת הדיבור לא הותקנה (קוד $R7). השירות יציע להוריד אותה בשימוש הראשון.$\r$\n$\r$\n"
