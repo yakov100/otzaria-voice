@@ -55,6 +55,16 @@ uint64_t removeTree(const Path& dir);
 // freeing space). Shared, read-only copies are left alone. Returns the bytes freed.
 uint64_t removeInstalled();
 
+// --install-pack <zip>: installs the voice pack from [zip], which an installer
+// carries (installer/windows/otzaria-voice.nsi), so that it works offline. A
+// complete pack already in use is left as is, whatever its version (an older one
+// is offered by the service, never replaced unasked). Otherwise [zip] must be
+// kRelease (size and SHA-256); it is unpacked and swapped in as after a download.
+// The caller stops a running service first. Exit codes: 0 installed or already
+// there, 2 no such file, 3 not this pack, 4 cannot unpack, 5 not enough disk
+// space, 6 the old pack is in use, 7 OTZARIA_VOICE_PACK_DIR is not writable.
+int installLocal(const Path& zip);
+
 // Starts the download in a background thread unless one is running. Before the
 // new pack replaces the old one, [release] is called so the caller can let go of
 // files it has open (the language model is memory-mapped).

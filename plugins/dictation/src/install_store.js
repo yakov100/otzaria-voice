@@ -3,10 +3,12 @@
 // build.py puts this file in the store edition ("store", id com.yaakovisrael.voice-search) in
 // place of install_github.js, with the same functions. The Otzaria plugin store takes a plugin that
 // comes with a service only if it downloads no program, and its installer brings the service and
-// this plugin together. So where the GitHub edition gets an installer, this one opens the plugin's
-// page in the store, where the installer is.
+// this plugin together. So where the GitHub edition gets an installer, this one opens the store,
+// where the installer is. A plugin's own page there is addressed by the store's internal id
+// (/plugins/<24 hex digits>, src/lib/pluginRef.js of Otzaria_Website), not by the manifest id,
+// so until that id is known the store's front page opens, and the text says what to look for.
 
-const STORE_PAGE = 'https://otzaria.org/plugins/com.yaakovisrael.voice-search';
+const STORE_PAGE = 'https://otzaria.org/plugins';
 
 let installerDownload = null; // the running getInstaller (the page opening), one at a time
 let installerPhase = '';
@@ -26,7 +28,7 @@ async function openStorePage() {
   installerPhase = 'page';
   const res = await Otzaria.call('app.openUrl', { url: STORE_PAGE });
   if (res && res.success) return true;
-  sayError('לא ניתן לפתוח את דף התוסף בחנות התוספים: ' + STORE_PAGE);
+  sayError('לא ניתן לפתוח את חנות התוספים: ' + STORE_PAGE);
   return false;
 }
 
@@ -49,15 +51,15 @@ function noServiceAsk(platform) {
     title: 'שירות הדיבור לא פועל',
     content: serviceWhere(platform) +
       (platform === 'windows'
-        ? 'אם לא — לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים, הורידו משם את תוכנת ההתקנה והפעילו אותה פעם אחת.'
-        : 'אם לא — בחנות התוספים יש כרגע תוכנת התקנה של השירות ל-Windows בלבד. לחצו «אישור» כדי לפתוח את דף התוסף בחנות התוספים.'),
+        ? 'אם לא — לחצו «אישור» כדי לפתוח את חנות התוספים. חפשו שם «חיפוש בדיבור», הורידו את תוכנת ההתקנה והפעילו אותה פעם אחת. חבילת הדיבור כלולה בה.'
+        : 'אם לא — בחנות התוספים יש כרגע תוכנת התקנה של השירות ל-Windows בלבד. לחצו «אישור» כדי לפתוח את חנות התוספים (חפשו שם «חיפוש בדיבור»).'),
   };
 }
 
 function updateHow() {
-  return 'השירות רץ במחשב ומתעדכן מדף התוסף בחנות התוספים: מורידים משם את תוכנת ההתקנה ומפעילים אותה פעם אחת. אם צריך, יוצע אחר כך להוריד חבילת דיבור חדשה.\n';
+  return 'השירות רץ במחשב ומתעדכן מחנות התוספים: בדף «חיפוש בדיבור» מורידים את תוכנת ההתקנה ומפעילים אותה פעם אחת.\n';
 }
 
 function updateQuestion() {
-  return 'לפתוח את דף התוסף בחנות?';
+  return 'לפתוח את חנות התוספים?';
 }

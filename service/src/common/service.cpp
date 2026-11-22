@@ -55,7 +55,7 @@
 
 namespace service {
 
-const char* kVersion = "2.5.5";
+const char* kVersion = "2.5.6";
 const char* kServiceId = "com.yaakovisrael.voice-search";
 
 namespace {

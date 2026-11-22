@@ -1,17 +1,23 @@
 # The Windows installer offered by the Otzaria plugin store (otzaria.org/plugins),
-# with the dictation plugin inside (installer/windows/otzaria-voice.nsi).
+# with the dictation plugin and the Hebrew voice pack inside
+# (installer/windows/otzaria-voice.nsi): one download that also works offline.
 #
 # The store takes an installer only with a GitHub build attestation that ties the
 # file to this repository, a commit and this workflow; its reviewer then reads
 # this workflow in full. So this file only builds: the service (x64 and ARM64,
 # from source, with Visual Studio and CMake from the runner image), the plugin
 # (Otzaria's own validator and packer), and the installer (NSIS from the
-# windows-2022 runner image), then attests the installer and the plugin. The service's full tests
-# stay in service.yml. The check job opens the installer the way the store does
-# (7-Zip, without running it), verifies the attestation, and installs it.
+# windows-2022 runner image), then attests the installer and the plugin. The
+# service's full tests stay in service.yml. The check job opens the installer the
+# way the store does (7-Zip, without running it), verifies the attestation, and
+# installs it.
 #
-# Nothing here is downloaded except the actions and the source itself; the
-# service's ONNX Runtime is Otzaria's own copy on the user's machine.
+# Downloaded here besides the actions and the source: the voice pack's zip, which
+# is data (speech models and a language model, no code). It is the asset of this
+# repository's own release that service/src/common/pack.cpp names, checked
+# against the size and SHA-256 written there, and goes into the installer as it
+# is; the service checks it again before unpacking it. The service's ONNX Runtime
+# is Otzaria's own copy on the user's machine.
 name: מתקין לחנות (Windows)
 
 on:
@@ -106,6 +112,25 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The voice pack this service version installs (pack.cpp, kRelease): its
+      # release asset, as it is, checked against the size and SHA-256 there.
+      - name: חבילת הדיבור
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $m = [regex]::Match((Get-Content service/src/common/pack.cpp -Raw),
+            'kRelease = \{\s*(\d+),\s*"https://github\.com/([^/]+/[^/]+)/releases/download/([^/"]+)/([^/"]+)",\s*(\d+),\s*"([0-9a-f]{64})"')
+          if (-not $m.Success) { Write-Error 'kRelease not found in pack.cpp'; exit 1 }
+          $repo, $tag, $file, $size, $sha = $m.Groups[2..6] | ForEach-Object Value
+          gh release download $tag --repo $repo --pattern $file --dir pack
+          if ($LASTEXITCODE) { exit 1 }
+          $zip = Get-Item "pack\$file"
+          $got = (Get-FileHash $zip.FullName).Hash.ToLower()
+          if ($zip.Length -ne [long]$size -or $got -ne $sha) { Write-Error "$file is $($zip.Length) bytes, $got; pack.cpp says $size, $sha"; exit 1 }
+          Write-Host "voice pack $($m.Groups[1].Value): $file, $size bytes, $sha"
+          "PACK_ZIP=$($zip.FullName)" >> $env:GITHUB_ENV
+
       - name: בנייה ב-NSIS
         id: build
         shell: pwsh
@@ -121,8 +146,11 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           & $makensis.FullName /V2 "/DAppVersion=$version" "/DSourceExe=$pwd\dist\otzaria-voice.exe" `
             "/DSourceExeArm64=$pwd\dist\otzaria-voice-arm64.exe" "/DPluginFile=$($plugin.FullName)" `
-            "/DOutFile=$pwd\out\$name" installer\windows\otzaria-voice.nsi
+            "/DPackZip=$env:PACK_ZIP" "/DOutFile=$pwd\out\$name" installer\windows\otzaria-voice.nsi
           if ($LASTEXITCODE) { exit 1 }
+          # The store takes installers of up to 350MiB (policy.js, LIMITS.installerBytes).
+          $length = (Get-Item "out\$name").Length
+          if ($length -gt 350MB) { Write-Error "$name is $length bytes, over the store's 350MiB"; exit 1 }
           Copy-Item $plugin.FullName out\
           Get-ChildItem out | ForEach-Object { '{0}  {1}  {2}' -f (Get-FileHash $_.FullName).Hash.ToLower(), $_.Length, $_.Name }
           "name=$name" >> $env:GITHUB_OUTPUT
@@ -153,12 +181,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: installer/ci
+          sparse-checkout: |
+            installer/ci
+            service/src/common
 
       - uses: actions/download-artifact@v4
         with:
           name: store-installer
           path: out
+
+      # On Windows on ARM a complete older pack is there before setup, as for a
+      # user who already has the service: setup must leave it exactly as it is.
+      # On x64 there is none: setup installs the pack it carries.
+      - name: חבילה קיימת (ARM64)
+        if: matrix.runner == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $pack = "$env:APPDATA\otzaria\stt\pack"
+          foreach ($f in 'ctc\model.int8.onnx', 'ctc\vocab.json', 'ctc\preprocessor.json', 'lm\library.otzlm', 'LICENSES.txt') {
+            New-Item -ItemType File -Force "$pack\$f" -Value 'an older pack' | Out-Null
+          }
+          Set-Content "$pack\version.txt" '4' -NoNewline
+          Set-Content "$pack\marker.txt" 'left as is' -NoNewline
 
       # As the store does (its worker, stages/extract.js): 7-Zip lists the
       # installer with the size of every entry, extracts it, and one of the
@@ -290,6 +334,61 @@ jobs:
           if ($p.ExitCode -ne 3) { Write-Error "--deliver-plugin without Otzaria: exit $($p.ExitCode), not 3"; exit 1 }
           Write-Host 'without Otzaria: exit 3'
 
+      - name: חבילת הדיבור אחרי ההתקנה, ו---install-pack
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pack = "$env:APPDATA\otzaria\stt\pack"
+          $st = (curl.exe -s -H 'X-Otzaria-Voice: 1' http://127.0.0.1:47811/status) | ConvertFrom-Json
+          Write-Host "status: pack=$($st.pack) packVersion=$($st.packVersion)"
+          $m = [regex]::Match((Get-Content service/src/common/pack.cpp -Raw),
+            'kRelease = \{\s*(\d+),\s*"https://github\.com/([^/]+/[^/]+)/releases/download/([^/"]+)/([^/"]+)",\s*(\d+),\s*"([0-9a-f]{64})"')
+          $version, $repo, $tag, $file, $size, $sha = $m.Groups[1..6] | ForEach-Object Value
+          if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+            # The older pack that was there: untouched.
+            if (-not $st.pack -or $st.packVersion -ne 4) { Write-Error 'the existing pack is not in use as it was'; exit 1 }
+            if ((Get-Content "$pack\marker.txt" -Raw) -ne 'left as is') { Write-Error 'the existing pack was replaced'; exit 1 }
+            Write-Host 'an existing complete pack was left as is'
+          } else {
+            if (-not $st.pack -or $st.packVersion -ne [int]$version) { Write-Error "pack $version is not installed"; exit 1 }
+            foreach ($f in 'ctc\model.int8.onnx', 'lm\library.otzlm', 'LICENSES.txt', 'MODELS-LICENSE.md') {
+              if (-not (Test-Path "$pack\$f")) { Write-Error "pack: missing $f"; exit 1 }
+            }
+            Write-Host "pack $version installed by setup"
+          }
+
+          gh release download $tag --repo $repo --pattern $file --dir zip
+          if ($LASTEXITCODE) { exit 1 }
+          $zip = (Get-Item "zip\$file").FullName
+          if ((Get-FileHash $zip).Hash.ToLower() -ne $sha) { Write-Error 'the downloaded zip is not the pack'; exit 1 }
+          $exe = "$env:LOCALAPPDATA\Programs\OtzariaVoice\otzaria-voice.exe"
+          function Invoke-Pack($argList, $envs) {
+            $psi = [Diagnostics.ProcessStartInfo]::new($exe)
+            foreach ($a in $argList) { $psi.ArgumentList.Add($a) }
+            foreach ($k in $envs.Keys) { $psi.Environment[$k] = $envs[$k] }
+            $psi.UseShellExecute = $false
+            $p = [Diagnostics.Process]::Start($psi)
+            if (-not $p.WaitForExit(600000)) { Write-Error 'install-pack did not finish'; exit 1 }
+            return $p.ExitCode
+          }
+          # On another port, so the installed service keeps running.
+          $quiet = @{ OTZARIA_VOICE_PORT = '47899' }
+          $code = Invoke-Pack @('--install-pack', $zip) $quiet
+          if ($code -ne 0) { Write-Error "a second --install-pack: exit $code, not 0 (left as is)"; exit 1 }
+          $code = Invoke-Pack @('--install-pack', "$env:RUNNER_TEMP\no-such.zip") $quiet
+          if ($code -ne 2) { Write-Error "--install-pack with no file: exit $code, not 2"; exit 1 }
+          Set-Content "$env:RUNNER_TEMP\not-the-pack.zip" 'x'
+          $other = Join-Path $env:RUNNER_TEMP ("$([char]0x05E8)$([char]0x05D9)$([char]0x05E7) " + 'roaming')
+          $code = Invoke-Pack @('--install-pack', "$env:RUNNER_TEMP\not-the-pack.zip") (@{ OTZARIA_VOICE_PORT = '47899'; APPDATA = $other })
+          if ($code -ne 3) { Write-Error "--install-pack with another file: exit $code, not 3"; exit 1 }
+          # A profile with Hebrew and a space in its path, and no pack yet.
+          $code = Invoke-Pack @('--install-pack', $zip) (@{ OTZARIA_VOICE_PORT = '47899'; APPDATA = $other })
+          if ($code -ne 0) { Write-Error "--install-pack into $other`: exit $code"; exit 1 }
+          if ((Get-Content "$other\otzaria\stt\pack\version.txt" -Raw).Trim() -ne $version) { Write-Error 'no pack in the Hebrew profile'; exit 1 }
+          Write-Host 'install-pack: left as is 0, no file 2, another file 3, a Hebrew path 0'
+
       - name: הסרה
         shell: pwsh
         run: |
@@ -303,4 +402,5 @@ jobs:
           if (Test-Path -LiteralPath $env:ODD_PATH) { Write-Error 'the plugin in the Hebrew folder stayed'; exit 1 }
           Start-Sleep 5
           if (Test-Path $dir) { Get-ChildItem $dir; Write-Error 'the install folder stayed'; exit 1 }
-          Write-Host 'uninstalled, the delivered plugin removed'
+          if (Test-Path "$env:APPDATA\otzaria\stt\pack") { Write-Error 'the voice pack stayed'; exit 1 }
+          Write-Host 'uninstalled, the delivered plugin and the voice pack removed'

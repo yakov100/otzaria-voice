@@ -14,7 +14,7 @@ const RELEASED = ['service.js', 'feedback.js', 'install_github.js', 'dictation.j
 const STORE = RELEASED.map(f => (f === 'install_github.js' ? 'install_store.js' : f));  // build.py, STORE_FILES
 const bundleOf = (store) => '(function () {\n\'use strict\';\n' +
   (store ? STORE : RELEASED).map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n') + '\n})();\n';
-const STORE_PAGE = 'https://otzaria.org/plugins/com.yaakovisrael.voice-search';
+const STORE_PAGE = 'https://otzaria.org/plugins';
 
 const INSTALLER = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-without-models.exe';
 const INSTALLER_FULL = 'https://github.com/yakov100/otzaria-voice/releases/latest/download/otzaria-voice-windows-x64-with-models.exe';
@@ -384,7 +384,7 @@ async function test(name, fn) {
     const now = [read('LATEST_SERVICE'), read('SERVICE_UPDATE_BELOW_WINDOWS'), read('SERVICE_UPDATE_BELOW')];
     // When this fails: decide who should be offered the new service (SERVICE_UPDATE_BELOW*), add its
     // news to offerServiceUpdate for them, and only then update this line.
-    assert.deepStrictEqual(now, ['2.5.5', '2.5.2', '2.5.1'],
+    assert.deepStrictEqual(now, ['2.5.6', '2.5.2', '2.5.1'],
       'LATEST_SERVICE or a threshold changed: decide the thresholds and the news, then update this test');
   });
 
@@ -439,7 +439,8 @@ async function test(name, fn) {
       assert.strictEqual(of(calls, 'network.download').length, 0, 'a download in the store edition');
       const asked = of(calls, 'ui.showConfirm');
       assert.strictEqual(asked.length, 1);
-      assert.ok(asked[0].payload.content.includes('דף התוסף בחנות התוספים'), asked[0].payload.content);
+      assert.ok(asked[0].payload.content.includes('חנות התוספים'), asked[0].payload.content);
+      assert.ok(asked[0].payload.content.includes('«חיפוש בדיבור»'), asked[0].payload.content);
       assert.ok(!asked[0].payload.content.includes('תיקיית ההורדות'), asked[0].payload.content);
       // The store has the installer for Windows only: elsewhere the text promises none.
       assert.strictEqual(asked[0].payload.content.includes('ל-Windows בלבד'), platform !== 'windows', asked[0].payload.content);
@@ -458,7 +459,7 @@ async function test(name, fn) {
     const asked = updateAsk(calls);
     assert.strictEqual(asked.length, 1, 'no update offered');
     assert.ok(asked[0].content.includes('cannot load'), asked[0].content);
-    assert.ok(asked[0].content.includes('לפתוח את דף התוסף בחנות?'), asked[0].content);
+    assert.ok(asked[0].content.includes('לפתוח את חנות התוספים?'), asked[0].content);
     assert.ok(!asked[0].content.includes('תיקיית ההורדות'), asked[0].content);
     assert.strictEqual(of(calls, 'network.download').length, 0, 'a download in the store edition');
     assert.deepStrictEqual(of(calls, 'app.openUrl').map(c => c.payload.url), [STORE_PAGE]);
@@ -487,7 +488,8 @@ async function test(name, fn) {
       fs.readFileSync(path.join(repo, 'service', 'src', 'common', 'service.cpp'), 'utf8'))[1];
     assert.strictEqual(id, storeManifest().id);
     const src = fs.readFileSync(path.join(root, 'src', 'install_store.js'), 'utf8');
-    assert.ok(src.includes("'https://otzaria.org/plugins/" + id + "'"), 'STORE_PAGE names another id');
+    // The store addresses a plugin's page by its own 24-hex id, not the manifest id (pluginRef.js).
+    assert.ok(/const STORE_PAGE = 'https:\/\/otzaria\.org\/plugins(\/[0-9a-f]{24})?';/.test(src), 'STORE_PAGE is not a store address');
   });
 
   await test('the store edition carries no download code and no GitHub address', () => {

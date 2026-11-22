@@ -74,6 +74,17 @@ bool copyFile(const std::wstring& from, const std::wstring& to) {
 }
 }  // namespace
 
+void stopRunning() {
+  service::postQuit();
+  const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(service::port());
+  for (int i = 0; i < 40; i++) {
+    HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, mutexName.c_str());
+    if (!m) break;
+    CloseHandle(m);
+    Sleep(250);
+  }
+}
+
 // On Windows on ARM both builds are installed (handoff.h), each under its own
 // name; the login start and "Installed apps" use the x64 one, which hands
 // over at start when Otzaria's ONNX Runtime is ARM64.
@@ -87,14 +98,7 @@ int install(bool quiet) {
   // and wait until it is gone. Launched while the old copy still held its
   // one-instance mutex, the new copy saw "already running" and exited, which
   // left no service at all until the next login.
-  service::postQuit();
-  const std::wstring mutexName = L"Local\\OtzariaVoiceService-" + std::to_wstring(service::port());
-  for (int i = 0; i < 40; i++) {
-    HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, mutexName.c_str());
-    if (!m) break;
-    CloseHandle(m);
-    Sleep(250);
-  }
+  stopRunning();
   CreateDirectoryW((localAppData() + L"\\Programs").c_str(), nullptr);
   CreateDirectoryW(installDir().c_str(), nullptr);
   const std::wstring own = dir + handoff::exeName(handoff::self());
