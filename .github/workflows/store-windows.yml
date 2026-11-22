@@ -157,7 +157,7 @@ jobs:
 
       # The last step that touches the files: the store compares the attested
       # SHA-256 with the file it receives.
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             out/*.exe
