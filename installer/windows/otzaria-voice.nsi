@@ -113,17 +113,19 @@ Function InstallPack
   ${GetRoot} "$APPDATA" $R1
   ${DriveSpace} "$R0\" "/D=F /S=M" $R2
   ${DriveSpace} "$R1\" "/D=F /S=M" $R3
+  ; --install-pack wants 1.5 times the zip free beside the pack (pack.cpp,
+  ; installLocal): about 510MB, besides the zip itself in $PLUGINSDIR.
   StrCpy $R6 "ok"
   ${If} $R0 == $R1
-    ${If} $R2 < 820
+    ${If} $R2 < 860
       StrCpy $R6 "space"
     ${EndIf}
   ${ElseIf} $R2 < 360
-  ${OrIf} $R3 < 460
+  ${OrIf} $R3 < 510
     StrCpy $R6 "space"
   ${EndIf}
   ${If} $R6 == "space"
-    StrCpy $PackNote "אין מספיק מקום בדיסק לחבילת הדיבור (צריך כ-820 מגה-בייט פנויים), ולכן היא לא הותקנה. השירות יציע להוריד אותה בשימוש הראשון.$\r$\n$\r$\n"
+    StrCpy $PackNote "אין מספיק מקום בדיסק לחבילת הדיבור (צריך כ-860 מגה-בייט פנויים), ולכן היא לא הותקנה. השירות יציע להוריד אותה בשימוש הראשון.$\r$\n$\r$\n"
     MessageBox MB_OK|MB_ICONEXCLAMATION|MB_RIGHT|MB_RTLREADING "$PackNote" /SD IDOK
     Return
   ${EndIf}

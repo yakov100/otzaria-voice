@@ -181,7 +181,10 @@ int run(std::vector<std::string> args) {
   if (arg == "--install-pack") {
     if (args.size() < 3) return 2;
 #ifdef _WIN32
-    install::stopRunning();  // nothing may hold the pack folder while it is swapped
+    // First, whatever the outcome: nothing may hold the pack folder while it is
+    // swapped, nor be downloading into it. Setup starts the service again
+    // (--install) right after.
+    install::stopRunning();
 #endif
     return pack::installLocal(platform::fromUtf8(args[2]));
   }
