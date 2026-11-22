@@ -93,7 +93,8 @@ installed (they are on macOS and on common desktops).
   `/status` reports `"arch": "x64"` or `"arm64"` (every system).
   `service/src/common/handoff.h`.
 - Idle memory: the model loads on the first dictation and is released after
-  3 idle minutes; on Windows the idle working set is ~210 KB.
+  5 idle minutes; on Windows the idle working set is then under 3 MB, and
+  private memory about 9-12 MB.
 
 ## Status
 
