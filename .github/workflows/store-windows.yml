@@ -10,7 +10,8 @@
 # windows-2022 runner image), then attests the installer and the plugin. The
 # service's full tests stay in service.yml. The check job opens the installer the
 # way the store does (7-Zip, without running it), verifies the attestation, and
-# installs it.
+# installs it. Before anything is attested, the source job checks the commit's
+# source as the store receives it (see there).
 #
 # Downloaded here besides the actions and the source: the voice pack's zip, which
 # is data (speech models and a language model, no code). It is the asset of this
@@ -29,6 +30,7 @@ on:
       - 'installer/windows/otzaria-voice.nsi'
       - 'installer/windows/notices-he.txt'
       - 'MODELS-LICENSE.md'
+      - '.gitattributes'
       - '.github/workflows/store-windows.yml'
   workflow_dispatch:
 
@@ -40,6 +42,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The store reads this commit's source from GitHub's tarball and rejects it when
+  # a file there differs from the commit's tree. A .gitattributes conversion does
+  # that (eol=crlf rewrote service/build.cmd in 2.5.6). git archive applies the
+  # same attributes, so this compares its output with the tree, offline. Nothing
+  # is attested, and so nothing is released, when they differ. It also checks
+  # that .cmd and .bat files, stored as they are, keep CRLF.
+  source:
+    name: המקור כפי שהחנות מקבלת אותו
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: הארכיון זהה לעץ
+        run: |
+          git -c core.autocrlf=false archive --format=tar --output="$RUNNER_TEMP/source.tar" HEAD
+          python3 - "$RUNNER_TEMP/source.tar" <<'EOF'
+          import hashlib, subprocess, sys, tarfile
+
+          def blob(data):
+              return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+          tree = {}
+          listing = subprocess.run(['git', 'ls-tree', '-r', '-z', 'HEAD'],
+                                   capture_output=True, check=True).stdout
+          for record in filter(None, listing.split(b'\0')):
+              meta, name = record.split(b'\t', 1)
+              mode, kind, sha = meta.decode().split()
+              if kind == 'blob':
+                  tree[name.decode('utf-8', 'surrogateescape')] = sha
+
+          problems, seen = [], set()
+          with tarfile.open(sys.argv[1]) as archive:
+              for member in archive:
+                  if member.isdir():
+                      continue
+                  seen.add(member.name)
+                  if member.issym():
+                      got = blob(member.linkname.encode('utf-8', 'surrogateescape'))
+                  elif member.isfile():
+                      data = archive.extractfile(member).read()
+                      got = blob(data)
+                      # .cmd and .bat are -text (stored as they are), so nothing adds the CRLF cmd.exe needs.
+                      if member.name.lower().endswith(('.cmd', '.bat')) and b'\n' in data.replace(b'\r\n', b''):
+                          problems.append(f'{member.name}: a batch file with LF line ends; cmd.exe needs CRLF')
+                  else:
+                      problems.append(f'{member.name}: unexpected entry type')
+                      continue
+                  want = tree.get(member.name)
+                  if want is None:
+                      problems.append(f'{member.name}: in the archive, not in the tree')
+                  elif got != want:
+                      problems.append(f'{member.name}: archive {got[:12]}, tree {want[:12]}')
+          problems += [f'{name}: in the tree, not in the archive' for name in sorted(set(tree) - seen)]
+
+          for problem in problems:
+              print(f'::error::{problem}')
+          print(f'{len(seen)} archived files, {len(tree)} blobs in the tree, {len(problems)} differences')
+          sys.exit(1 if problems else 0)
+          EOF
+
   plugin:
     name: התוסף
     runs-on: ubuntu-latest
@@ -95,7 +157,7 @@ jobs:
 
   installer:
     name: המתקין
-    needs: [plugin, service]
+    needs: [source, plugin, service]
     # NSIS is in the windows-2022 image (3.10), not in windows-2025's.
     runs-on: windows-2022
     permissions:
