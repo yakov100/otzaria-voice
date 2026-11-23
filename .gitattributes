@@ -8,9 +8,12 @@
 *.c        text eol=lf
 installer/macos/scripts/*  text eol=lf
 
-# Windows batch files need CRLF.
-*.cmd      text eol=crlf
-*.bat      text eol=crlf
+# Windows batch files need CRLF. They are stored with CRLF and never converted
+# (-text): an export (GitHub's source tarball, git archive) must hold the same
+# bytes as the commit, and the Otzaria plugin store rejects a source whose
+# tarball differs from the commit's tree. "eol=crlf" converted them on export.
+*.cmd      -text
+*.bat      -text
 
 # Binary assets.
 *.png      binary
