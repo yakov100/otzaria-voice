@@ -4,6 +4,7 @@
 ; Compile (NSIS 3, Unicode):
 ;   makensis /DAppVersion=2.5.5 /DSourceExe=path\otzaria-voice.exe
 ;            /DSourceExeArm64=path\otzaria-voice-arm64.exe /DPluginFile=path\plugin.otzplugin
+;            [/DPackZip=path\otzaria-voice-he-v5.zip]
 ;            /DOutFile=path\setup.exe otzaria-voice.nsi
 ;
 ; Why NSIS and not Inno Setup (otzaria-voice.iss): the store opens every
@@ -12,9 +13,18 @@
 ; Setup installers. It opens NSIS ones, and the store refuses an entry whose
 ; size 7-Zip cannot tell before extracting. Compressed files have none (each
 ; alone), and in one solid block the last file has none; stored files always
-; do. So the files are stored: the installer is about 2.6MB instead of 0.9MB.
+; do. So the files are stored. Without the voice pack the installer is about
+; 2.6MB; with it about 337MB (the pack's zip is compressed already).
 ;
 ; What it does is what the Inno installer does, plus the plugin:
+;   0. With /DPackZip (the store's installer: one download that also works
+;      offline), the voice pack comes first, before any service runs:
+;      `otzaria-voice.exe --install-pack <zip>` stops a running service, checks the
+;      zip against the pack this service version installs (size, SHA-256) and
+;      unpacks it to %APPDATA%\otzaria\stt\pack. A complete pack already there is
+;      left as is, whatever its version: the service offers a newer one itself.
+;      Without disk space, or on any failure, setup goes on without the pack, and
+;      the service downloads it (data only) the first time dictation needs it.
 ;   1. The service installs itself: `otzaria-voice.exe --install --quiet` stops a
 ;      running older copy, copies itself (and on Windows on ARM the ARM64 build)
 ;      to %LOCALAPPDATA%\Programs\OtzariaVoice, registers login start (HKCU Run)
@@ -24,8 +34,6 @@
 ;      `otzaria-voice.exe --deliver-plugin <file>` asks Otzaria to install it
 ;      (otzaria://plugin/install-local). Otzaria asks the user first, so the
 ;      file stays; uninstalling the service removes it.
-; No voice pack is carried: the service downloads it (data only) the first time
-; dictation needs it.
 ;
 ; This file is UTF-8 with a BOM (NSIS reads the Hebrew text as UTF-8 then).
 
@@ -44,15 +52,22 @@ SetCompress off     ; the files: see above
 !ifndef SourceExeArm64
   !error "Define SourceExeArm64: /DSourceExeArm64=path\otzaria-voice-arm64.exe"
 !endif
+!ifdef PackZip
+  ; The repository's MODELS-LICENSE.md: the copy inside a pack's zip is the one
+  ; of the day the pack was made, and may predate plugins approved since.
+  !ifndef ModelsLicense
+    !error "With PackZip, define ModelsLicense: /DModelsLicense=path\MODELS-LICENSE.md"
+  !endif
+!endif
 !ifndef PluginFile
   !error "Define PluginFile: /DPluginFile=path\plugin.otzplugin"
 !endif
 !ifndef OutFile
   !define OutFile "otzaria-voice-windows-${AppVersion}.exe"
 !endif
-
 !include "LogicLib.nsh"
 !include "x64.nsh"
+!include "FileFunc.nsh"
 !include "MUI2.nsh"
 
 !define AppName "שירות הדיבור של אוצריא"
@@ -79,8 +94,9 @@ VIAddVersionKey /LANG=1037 "LegalCopyright" "https://github.com/yakov100/otzaria
 !insertmacro MUI_PAGE_LICENSE "notices-he.txt"
 !insertmacro MUI_PAGE_INSTFILES
 Var PluginNote  ; set by the section: what happened to the plugin
+Var PackNote    ; and to the voice pack
 !define MUI_FINISHPAGE_TITLE "שירות הדיבור הותקן"
-!define MUI_FINISHPAGE_TEXT "השירות פועל, ויעלה מעצמו בכל כניסה למחשב.$\r$\n$\r$\n$PluginNote$\r$\n$\r$\nלהסרת השירות: הגדרות Windows ← אפליקציות מותקנות ← $\"${AppName}$\"."
+!define MUI_FINISHPAGE_TEXT "השירות פועל, ויעלה מעצמו בכל כניסה למחשב.$\r$\n$\r$\n$PackNote$PluginNote$\r$\n$\r$\nלהסרת השירות: הגדרות Windows ← אפליקציות מותקנות ← $\"${AppName}$\"."
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "Hebrew"
 
@@ -94,6 +110,60 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
+!ifdef PackZip
+; Step 0 (see the top): the voice pack, before any service runs. Never stops
+; setup: without the pack the service downloads it when dictation needs it.
+Function InstallPack
+  ; The zip (about 320MB) goes to $PLUGINSDIR, the pack (about 400MB) beside
+  ; Otzaria's data, and an older copy stays until the new one is in place.
+  ${GetRoot} "$PLUGINSDIR" $R0
+  ${GetRoot} "$APPDATA" $R1
+  ${DriveSpace} "$R0\" "/D=F /S=M" $R2
+  ${DriveSpace} "$R1\" "/D=F /S=M" $R3
+  ; --install-pack wants 1.5 times the zip free beside the pack (pack.cpp,
+  ; installLocal): about 510MB, besides the zip itself in $PLUGINSDIR.
+  StrCpy $R6 "ok"
+  ${If} $R0 == $R1
+    ${If} $R2 < 860
+      StrCpy $R6 "space"
+    ${EndIf}
+  ${ElseIf} $R2 < 360
+  ${OrIf} $R3 < 510
+    StrCpy $R6 "space"
+  ${EndIf}
+  ${If} $R6 == "space"
+    StrCpy $PackNote "אין מספיק מקום בדיסק לחבילת הדיבור (צריך כ-860 מגה-בייט פנויים), ולכן היא לא הותקנה. השירות יציע להוריד אותה בשימוש הראשון.$\r$\n$\r$\n"
+    MessageBox MB_OK|MB_ICONEXCLAMATION|MB_RIGHT|MB_RTLREADING "$PackNote" /SD IDOK
+    Return
+  ${EndIf}
+
+  SetDetailsPrint textonly
+  DetailPrint "מעתיק את חבילת הדיבור (כ-320 מגה-בייט)..."
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=otzaria-voice-he.zip" "${PackZip}"
+  DetailPrint "מתקין את חבילת הדיבור..."
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\otzaria-voice.exe" --install-pack "$PLUGINSDIR\otzaria-voice-he.zip"' $R7
+  ${If} ${Errors}
+    StrCpy $R7 "?"  ; the program did not start
+  ${EndIf}
+  Delete "$PLUGINSDIR\otzaria-voice-he.zip"
+  ${If} $R7 == 0
+    ; The current models license beside them, over the zip's copy, as the GitHub
+    ; installers with the models do (installer/fetch-pack.sh); notices-he.txt
+    ; says it is there.
+    SetOutPath "$APPDATA\otzaria\stt\pack"
+    File "/oname=MODELS-LICENSE.md" "${ModelsLicense}"
+    SetOutPath "$PLUGINSDIR"
+    StrCpy $PackNote "חבילת הדיבור מותקנת: ההכתבה עובדת גם בלי אינטרנט.$\r$\n$\r$\n"
+  ${Else}
+    StrCpy $PackNote "חבילת הדיבור לא הותקנה (קוד $R7). השירות יציע להוריד אותה בשימוש הראשון.$\r$\n$\r$\n"
+    MessageBox MB_OK|MB_ICONEXCLAMATION|MB_RIGHT|MB_RTLREADING "$PackNote" /SD IDOK
+  ${EndIf}
+  SetDetailsPrint none
+FunctionEnd
+!endif
+
 Section "Install"
   SetDetailsPrint textonly
   DetailPrint "מתקין את שירות הדיבור..."
@@ -106,6 +176,14 @@ Section "Install"
     File "/oname=otzaria-voice-arm64.exe" "${SourceExeArm64}"
   ${EndIf}
 
+  StrCpy $PackNote ""
+!ifdef PackZip
+  Call InstallPack
+!endif
+
+  SetDetailsPrint textonly
+  DetailPrint "מתקין את שירות הדיבור..."
+  SetDetailsPrint none
   ClearErrors
   ExecWait '"$PLUGINSDIR\otzaria-voice.exe" --install --quiet' $0
   ${If} ${Errors}

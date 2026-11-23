@@ -23,6 +23,10 @@ platform::Path installedExe();
 // This program runs from the install folder (either build, handoff.h).
 bool isInstalledCopy();
 
+// Asks a running copy on this port to quit, and waits (up to 10 s) until its
+// one-instance mutex is gone.
+void stopRunning();
+
 // --deliver-plugin <path>: the store's installer (installer/windows/otzaria-voice.nsi)
 // has put the plugin it carries in a folder of its own under %TEMP%; this asks
 // Otzaria to install it (otzaria://plugin/install-local). Otzaria may read the

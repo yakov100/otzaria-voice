@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "org.otzaria.voice-search",
   "name": "חיפוש בדיבור",
-  "version": "2.3.5",
+  "version": "2.3.6",
   "description": "כפתור מיקרופון לחיפוש: מדברים, והטקסט נכתב בשדה החיפוש. הזיהוי נעשה במחשב, בלי אינטרנט. האינטרנט משמש רק להורדת שירות הדיבור וחבילת הקול.",
   "author": "יעקבישראל",
   "homepage": "https://github.com/yakov100/otzaria-voice",

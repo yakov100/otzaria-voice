@@ -18,6 +18,7 @@
 
 #include "handoff.h"
 #include "install.h"
+#include "pack.h"
 #include "platform.h"
 #include "service.h"
 
@@ -176,6 +177,17 @@ int run(std::vector<std::string> args) {
     return args.size() > 2 ? install::deliverPlugin(platform::fromUtf8(args[2])) : 2;
   }
 #endif
+  // The store's installer: the voice pack it carries (pack.h, installLocal).
+  if (arg == "--install-pack") {
+    if (args.size() < 3) return 2;
+#ifdef _WIN32
+    // First, whatever the outcome: nothing may hold the pack folder while it is
+    // swapped, nor be downloading into it. Setup starts the service again
+    // (--install) right after.
+    install::stopRunning();
+#endif
+    return pack::installLocal(platform::fromUtf8(args[2]));
+  }
   const bool quiet = args.size() > 2 && args[2] == "--quiet";
   if (arg == "--install") return install::install(quiet);
   if (arg == "--uninstall") return install::uninstall(quiet);

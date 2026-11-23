@@ -76,7 +76,8 @@ class MappedFile {
 #endif
 };
 
-// Returns freed heap pages and the working set to the system.
+// Returns freed heap pages (on Windows also the free blocks the heap keeps
+// committed) and the working set to the system.
 void trimMemory();
 
 void sleepMs(unsigned ms);

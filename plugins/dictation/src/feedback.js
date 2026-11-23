@@ -14,12 +14,13 @@ const SERVICE_SEEN_SIGNS = [SERVICE_SEEN_KEY, 'serviceUpdateDeclined', 'packUpda
 // The newest voice service this plugin knows of (kVersion in service/src/common/service.cpp). It
 // keys the user's "not now" (one per version), and does NOT decide who is asked: that is
 // SERVICE_UPDATE_BELOW(_WINDOWS). A plugin for a newer service raises both, and adds its news.
-const LATEST_SERVICE = '2.5.5';
+const LATEST_SERVICE = '2.5.6';
 // Only a service older than these is offered the update. On Windows 2.5.2 fixed "cannot load
 // ...onnxruntime.dll" (Visual C++ next to otzaria.exe; Windows 11 on ARM); elsewhere the last change
 // users notice is 2.5.1 (final beam 48). 2.5.3 added only the models license and a fixed link, so
 // a 2.5.2 is not asked. 2.5.4 brought voice pack 5, which the service offers itself; 2.5.5 added
-// only what the Otzaria plugin store needs (it answers the store's check, and checks Host).
+// only what the Otzaria plugin store needs (it answers the store's check, and checks Host); 2.5.6
+// only installs the voice pack that the store's installer carries.
 const SERVICE_UPDATE_BELOW_WINDOWS = '2.5.2';
 const SERVICE_UPDATE_BELOW = '2.5.1';
 const PACK_BUSY = ['downloading', 'verifying', 'extracting'];

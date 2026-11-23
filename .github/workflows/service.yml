@@ -1006,12 +1006,12 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           run=''
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow store-windows.yml --commit "$GITHUB_SHA" \
               --event push --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"')"
             set -- $run
             [ "${2:-}" = completed ] && break
-            echo "store-windows.yml: ${run:-no run yet} ($i/60)"
+            echo "store-windows.yml: ${run:-no run yet} ($i/120)"
             sleep 30
           done
           set -- $run
@@ -1058,7 +1058,7 @@ jobs:
           | macOS (Apple silicon) | \`.pkg\` — בפעם הראשונה: קליק ימני ← פתיחה |
           | Android | \`.apk\` |
 
-          \`otzaria-voice-windows-store-…exe\` הוא המתקין שמוצע בחנות התוספים של אוצריא: השירות לבד, בלי חבילת דיבור, ובתוכו התוסף חיפוש בדיבור בגרסת החנות (\`com.yaakovisrael.voice-search-….otzplugin\`, גם הוא כאן), שעובר לאוצריא בסוף ההתקנה. הוא נבנה ב-\`store-windows.yml\` ונושא אישור בנייה של GitHub.
+          \`otzaria-voice-windows-store-…exe\` הוא המתקין שמוצע בחנות התוספים של אוצריא, הכול בקובץ אחד שאפשר גם להעביר למחשב בלי אינטרנט: השירות, חבילת הדיבור, והתוסף חיפוש בדיבור בגרסת החנות (\`com.yaakovisrael.voice-search-….otzplugin\`, גם הוא כאן), שעובר לאוצריא בסוף ההתקנה. הוא נבנה ב-\`store-windows.yml\` ונושא אישור בנייה של GitHub.
 
           הוראות מלאות: https://github.com/$GITHUB_REPOSITORY#readme
 

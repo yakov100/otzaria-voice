@@ -55,14 +55,16 @@
 
 namespace service {
 
-const char* kVersion = "2.5.5";
+const char* kVersion = "2.5.6";
 const char* kServiceId = "com.yaakovisrael.voice-search";
 
 namespace {
 
-// A reload costs 1-4 s (model graph, 98 MB language model, phrase tables), which
-// the user hears as "I spoke and the text came late"; an idle engine costs only RAM.
-constexpr auto kUnloadAfter = std::chrono::minutes(20);
+// A loaded engine holds some 350 MB, which the rest of the computer needs back
+// soon after the user stops dictating. The price is a reload of 1-4 s (model
+// graph, 98 MB language model, phrase tables) at the next dictation; the
+// microphone is already open meanwhile, so only the first text comes later.
+constexpr auto kUnloadAfter = std::chrono::minutes(5);
 constexpr auto kMaxSession = std::chrono::seconds(100);  // fetchStream caps a request at 120s
 
 #if defined(_WIN32)
