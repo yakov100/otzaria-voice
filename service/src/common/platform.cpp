@@ -349,6 +349,15 @@ MappedFile::~MappedFile() {
 
 void trimMemory() {
   HeapCompact(GetProcessHeap(), 0);
+  // After the engine is released the process heap keeps its free blocks committed:
+  // up to some 100 MB after a dozen load/unload cycles, with under 1 MB in use.
+  // HeapOptimizeResources (Windows 8.1+) decommits them; earlier systems refuse it.
+  struct {
+    DWORD Version;
+    DWORD Flags;
+  } optimize{1, 0};  // HEAP_OPTIMIZE_RESOURCES_INFORMATION, current version 1
+  HeapSetInformation(nullptr, static_cast<HEAP_INFORMATION_CLASS>(3) /* HeapOptimizeResources */,
+                     &optimize, sizeof(optimize));
   SetProcessWorkingSetSize(GetCurrentProcess(), SIZE_T(-1), SIZE_T(-1));
 }
 
